@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-01
+
+Swift source-bridging. The agent can now go from "found a leak in the cycle" to "find the file/line in this project" without leaving chat. 20 → 25 tools.
+
+### Added
+
+- **5 Swift source-bridging tools** backed by a `sourcekit-lsp` subprocess pool:
+  - `swiftGetSymbolDefinition` — locate a class/struct/enum/etc. declaration. Pre-scans candidate paths with a fast regex, then asks SourceKit-LSP for jump-to-definition.
+  - `swiftFindSymbolReferences` — every reference to a Swift symbol via `textDocument/references`. Includes a `needsIndex` hint when the IndexStoreDB is missing.
+  - `swiftGetSymbolsOverview` — top-level symbols in a file (cheap orientation when landing in a new file).
+  - `swiftGetHoverInfo` — type info / docs at a position. Useful to disambiguate class vs struct `self` captures.
+  - `swiftSearchPattern` — pure regex search over a Swift file (no LSP, no index). Catches closure capture lists and other patterns LSP can't see.
+- **`src/runtime/sourcekit/` infrastructure**: `client.ts` (LSP subprocess + JSON-RPC stdio via `vscode-jsonrpc`), `pool.ts` (per-project-root client pool with 5-minute idle shutdown), `protocol.ts` (typed wrappers for the LSP methods we use, using `vscode-languageserver-protocol` types).
+- New deps: `vscode-jsonrpc`, `vscode-languageserver-protocol`. Both MIT.
+- 13 new unit tests for the Swift tools (mostly `searchPattern` + helper coverage; LSP-backed tools require a live SourceKit-LSP and are smoke-tested out-of-band).
+
+### Notes
+
+- The Swift tools require macOS + a full Xcode install (`xcrun sourcekit-lsp` must be available). Command Line Tools alone is not enough.
+- For cross-file references, the project needs an `IndexStoreDB` at `<projectRoot>/.build/index/store`. Build it with `swift build -Xswiftc -index-store-path -Xswiftc <projectRoot>/.build/index/store`.
+- `sourcekit-lsp` cold start is ~2s; the pool amortizes that across calls within a project.
+
 ## [1.1.0] — 2026-05-01
 
 Response-size + cycle-scoped queries + license switch + first-run engagement.
@@ -97,7 +119,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/carloshpdoc/memorydetective/releases/tag/v1.0.0

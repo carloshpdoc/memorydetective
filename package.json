@@ -1,6 +1,6 @@
 {
   "name": "memorydetective",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MCP server for iOS leak hunting and performance investigation. Reads .memgraph + .trace files, captures new ones via xctrace and leaks(1), classifies retain cycles.",
   "type": "module",
   "bin": {
@@ -51,6 +51,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "fast-xml-parser": "^5.7.2",
+    "vscode-jsonrpc": "^8.2.1",
+    "vscode-languageserver-protocol": "^3.17.5",
     "zod": "^3.23.0"
   },
   "devDependencies": {

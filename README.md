@@ -177,7 +177,7 @@ Copilot's MCP integration moves fast — if this snippet is stale, see the [VS C
 
 ## API
 
-20 MCP tools, grouped by purpose.
+25 MCP tools, grouped by purpose.
 
 ### Read & analyze (13)
 
@@ -223,6 +223,20 @@ Copilot's MCP integration moves fast — if this snippet is stale, see the [VS C
 | Tool | What |
 |---|---|
 | `detectLeaksInXCUITest` | **Experimental.** Build the workspace for testing, run the named XCUITest, capture `.memgraph` baseline + after, diff. Returns `passed: false` when new ROOT CYCLEs appear that aren't in the user's allowlist. CI-runnable. |
+
+### Swift source bridging (5)
+
+Pair the memory-graph diagnosis with source-code lookups via SourceKit-LSP. Closes the loop "found this leak in the cycle → find the file/line in your project".
+
+| Tool | What |
+|---|---|
+| `swiftGetSymbolDefinition` | Locate the file:line where a Swift symbol is declared. Pre-scans `candidatePaths` (or `hint.filePath`) with a fast regex, then asks SourceKit-LSP for jump-to-definition. |
+| `swiftFindSymbolReferences` | Find every reference to a Swift symbol via SourceKit-LSP `textDocument/references`. Requires an `IndexStoreDB` for cross-file results — the response carries a `needsIndex` hint when the index is missing. |
+| `swiftGetSymbolsOverview` | List top-level symbols (classes, structs, enums, protocols, free functions) in a Swift file via `documentSymbol`. Cheap orientation when the agent lands in a new file. |
+| `swiftGetHoverInfo` | Type info / docs at a (line, character) position. Disambiguates `self` captures: a class self in a closure can leak; a struct self can't. |
+| `swiftSearchPattern` | Pure regex search over a Swift file (no LSP, no index). Catches what LSP misses: closure capture lists, `Task { ... self ... }` blocks, custom patterns from a leak chain. |
+
+These tools require macOS + Xcode (full Xcode, not just Command Line Tools — `xcrun sourcekit-lsp` must be available). They start a `sourcekit-lsp` subprocess per project root and reuse it across calls; the subprocess shuts down after a 5-minute idle window.
 
 > **Why `captureMemgraph` doesn't work on physical iOS devices**: `leaks(1)` only attaches to processes running on the local Mac (which includes iOS simulators). Memory Graph capture from a real device goes through Xcode's debugger over USB/lockdownd — different mechanism, no public CLI equivalent.
 
@@ -275,17 +289,6 @@ Contributions are welcome — bug reports, feature requests, new cycle patterns,
 
 In v0.2 the catalog moves to a separate repo so patterns can be added without modifying the server code.
 
-### Working on the demo GIF
-
-The demo GIF is generated deterministically from `examples/demo.tape` via [vhs](https://github.com/charmbracelet/vhs):
-
-```bash
-brew install vhs
-vhs examples/demo.tape
-```
-
-The `.tape` file is committed; the `.gif` is regenerated from it. If you change the demo flow, please update both.
-
 ## Support this project
 
 If `memorydetective` saves you time, you can support continued development:
@@ -300,14 +303,6 @@ Every contribution helps keep this maintained and documented.
 Apache 2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 Permits commercial use, modification, distribution, patent use. Includes attribution clause via the `NOTICE` file.
-
-## Companion MCPs
-
-`memorydetective` focuses on memory-graph and trace artifacts. To bridge "found this leak in the cycle" with "find it in your codebase", pair it with a Swift source-aware MCP. Recommended:
-
-- [SwiftLens](https://github.com/swiftlens/swiftlens) — wraps SourceKit-LSP for Swift symbol lookup, reference search, hover info. Different license model (non-commercial); read its terms before using in a paid product.
-
-A future version of `memorydetective` may include a similar source-bridging surface natively under Apache 2.0; see the v1.2 roadmap notes in the design docs.
 
 ## Why "memorydetective"?
 

@@ -70,6 +70,18 @@ import {
   reachableFromCycle,
   reachableFromCycleSchema,
 } from "./tools/reachableFromCycle.js";
+import {
+  swiftGetSymbolDefinition,
+  swiftGetSymbolDefinitionSchema,
+  swiftFindSymbolReferences,
+  swiftFindSymbolReferencesSchema,
+  swiftGetSymbolsOverview,
+  swiftGetSymbolsOverviewSchema,
+  swiftGetHoverInfo,
+  swiftGetHoverInfoSchema,
+  swiftSearchPattern,
+  swiftSearchPatternSchema,
+} from "./tools/swift/index.js";
 
 const SERVER_NAME = "memorydetective";
 const SERVER_VERSION = "0.1.0-dev";
@@ -392,6 +404,76 @@ server.registerTool(
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
+  },
+);
+
+server.registerTool(
+  "swiftGetSymbolDefinition",
+  {
+    title: "Locate a Swift symbol's source declaration",
+    description:
+      "Find the file:line where a Swift symbol (class, struct, enum, protocol, func, var, etc.) is declared. Pre-scans `candidatePaths` (or `hint.filePath`) with a fast regex first, then asks SourceKit-LSP for jump-to-definition. Returns the position even when LSP can't follow through. Use after `findRetainers` / `classifyCycle` surface a class name from a memgraph cycle to land in the actual source file.",
+    inputSchema: swiftGetSymbolDefinitionSchema.shape,
+  },
+  async (input) => {
+    const result = await swiftGetSymbolDefinition(input);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "swiftFindSymbolReferences",
+  {
+    title: "Find every reference to a Swift symbol",
+    description:
+      "Locates the symbol's declaration in `filePath`, then asks SourceKit-LSP for `textDocument/references`. Returns every callsite + capture across the project, with a snippet of each line. **Requires an IndexStoreDB** at `<projectRoot>/.build/index/store` for cross-file references — build it with `swift build -Xswiftc -index-store-path -Xswiftc <projectRoot>/.build/index/store`. The result includes a `needsIndex: true` hint when the index is missing.",
+    inputSchema: swiftFindSymbolReferencesSchema.shape,
+  },
+  async (input) => {
+    const result = await swiftFindSymbolReferences(input);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "swiftGetSymbolsOverview",
+  {
+    title: "List top-level symbols in a Swift file",
+    description:
+      "Cheap orientation: returns the top-level symbols (classes, structs, enums, protocols, free functions) declared in a Swift file via SourceKit-LSP's `documentSymbol`. Set `topLevelOnly: false` for nested children too. Useful right after `swiftGetSymbolDefinition` lands you in a new file.",
+    inputSchema: swiftGetSymbolsOverviewSchema.shape,
+  },
+  async (input) => {
+    const result = await swiftGetSymbolsOverview(input);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "swiftGetHoverInfo",
+  {
+    title: "Get type info / docs at a Swift source position",
+    description:
+      "SourceKit-LSP `textDocument/hover` at a (line, character) position. Returns the markdown / plaintext hover content plus a best-effort extracted declaration fragment. Use to disambiguate `self` captures: a class self in a closure can leak; a struct self can't.",
+    inputSchema: swiftGetHoverInfoSchema.shape,
+  },
+  async (input) => {
+    const result = await swiftGetHoverInfo(input);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "swiftSearchPattern",
+  {
+    title: "Regex-search a Swift file (no LSP)",
+    description:
+      "Pure regex search over a file's contents — no SourceKit-LSP, no IndexStoreDB. Catches what LSP misses: closure capture lists (`[weak self]`, `[unowned self]`), `Task { ... self ... }` blocks, and any other pattern the agent constructs from a leak chain. Returns matches with line/character positions and a trimmed snippet.",
+    inputSchema: swiftSearchPatternSchema.shape,
+  },
+  async (input) => {
+    const result = await swiftSearchPattern(input);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   },
 );
 
