@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-05-01
+
+### Added
+
+- USAGE.md: new section 6 "Pipeline awareness" documenting `suggestedNextCalls` (with a full JSON example), `getInvestigationPlaybook` (with the five playbook kinds), and the tool-description tag taxonomy. Establishes the workflow norm: every release ships with USAGE updates.
+- USAGE.md section 4: row for `getInvestigationPlaybook` added at the top of the follow-up requests table.
+- README API section: opening paragraph documents the namespace tags + `suggestedNextCalls` mechanism.
+
+### Changed
+
+- No code changes from `1.3.0` — this is a documentation catch-up release.
+
 ## [1.3.0] — 2026-05-01
 
 Pipeline-aware release. Addresses real-user feedback that the Swift tools were "an attachment" rather than part of the investigation chain. **Discovery is now data, not inference.** 25 → 26 tools.
@@ -160,7 +172,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.1.0...v1.2.0

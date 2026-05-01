@@ -210,6 +210,7 @@ Once you have the diagnosis, here are useful follow-up prompts you can paste int
 
 | Prompt | What Claude calls |
 |---|---|
+| "I want to investigate a memgraph leak — what's the canonical sequence?" | `getInvestigationPlaybook({ kind: "memgraph-leak" })` — returns the 6-step pipeline with `argsTemplate` for each tool. |
 | "How many `DetailViewModel` instances are leaking?" | `countAlive(path, className: "DetailViewModel")` |
 | "How many `NSURLSessionConfiguration`s are *inside* the cycle rooted at `DetailViewModel`?" | `reachableFromCycle(path, rootClassName: "DetailViewModel", className: "NSURLSessionConfiguration")` |
 | "Show the retain chain that keeps `DetailViewModel` alive." | `findRetainers(path, className: "DetailViewModel")` |
@@ -268,7 +269,96 @@ The app process exited before `leaks --outputGraph` could attach. Configure your
 
 ---
 
-## 6. Where to go from here
+## 6. Pipeline awareness (suggestedNextCalls + playbooks)
+
+Discovery is data, not inference. As of v1.3, the tools that matter most return a `suggestedNextCalls` field with pre-populated arguments and a one-sentence rationale per entry. The orchestrating agent can chain calls without re-reasoning over the result.
+
+### `suggestedNextCalls` — example from `classifyCycle`
+
+```jsonc
+{
+  "ok": true,
+  "totalCycles": 4,
+  "classified": [ /* ... */ ],
+  "suggestedNextCalls": [
+    {
+      "tool": "swiftSearchPattern",
+      "args": {
+        "pattern": "\\.tag\\(",
+        "filePath": "<set to a candidate Swift file in your project>"
+      },
+      "why": "Locate the code construct implicated by swiftui.tag-index-projection. The regex matches the SwiftUI signal that produces this cycle."
+    },
+    {
+      "tool": "swiftGetSymbolDefinition",
+      "args": {
+        "symbolName": "DetailViewModel",
+        "candidatePaths": ["<set to a Sources/ or app target directory>"]
+      },
+      "why": "Jump to the declaration of DetailViewModel, the user-defined type captured in this cycle."
+    }
+  ]
+}
+```
+
+The agent reads `suggestedNextCalls`, fills in the `<...>` placeholders from project context, and chains. No re-reasoning required.
+
+### `getInvestigationPlaybook` — start here for a fresh investigation
+
+For agents that haven't seen the project before, ask for the canonical pipeline first:
+
+```jsonc
+{
+  "tool": "getInvestigationPlaybook",
+  "args": { "kind": "memgraph-leak" }
+}
+```
+
+Returns a 6-step sequence with `argsTemplate` per step:
+
+```jsonc
+{
+  "kind": "memgraph-leak",
+  "summary": "Diagnose a SwiftUI / Combine retain cycle from a `.memgraph` snapshot, locate the offending code, and propose a fix.",
+  "steps": [
+    { "step": 1, "tool": "analyzeMemgraph", "purpose": "..." },
+    { "step": 2, "tool": "classifyCycle", "purpose": "..." },
+    { "step": 3, "tool": "reachableFromCycle", "purpose": "..." },
+    { "step": 4, "tool": "swiftSearchPattern", "purpose": "..." },
+    { "step": 5, "tool": "swiftGetSymbolDefinition", "purpose": "..." },
+    { "step": 6, "tool": "swiftFindSymbolReferences", "purpose": "..." }
+  ]
+}
+```
+
+Five playbooks ship in v1.3:
+
+| Kind | Use when |
+|---|---|
+| `memgraph-leak` | You have a `.memgraph` and want to find + fix a retain cycle |
+| `perf-hangs` | App feels slow; suspect main-thread blocking |
+| `ui-jank` | Animations drop frames |
+| `app-launch-slow` | Cold-start time is over budget |
+| `verify-fix` | Confirm a fix actually resolved the cycle |
+
+### Tool description tags
+
+Every tool description starts with a category tag so related tools are visible as a group:
+
+| Tag | What |
+|---|---|
+| `[mg.memory]` | memgraph parsing, cycle classification, retainer chains |
+| `[mg.trace]` | xctrace schemas (hangs, allocations, app-launch, animation hitches, time-profile) |
+| `[mg.code]` | Swift source bridging via SourceKit-LSP |
+| `[mg.log]` | macOS unified logging (`log show` / `log stream`) |
+| `[mg.discover]` | xctrace device + template listing |
+| `[mg.render]` | Cycle visualization (Mermaid + Graphviz) |
+| `[mg.ci]` | XCUITest leak detection |
+| `[meta]` | Pipeline-discovery tools like `getInvestigationPlaybook` |
+
+The tag is leading text in the MCP description, so it shows up in any tools/list output and inside Claude Code's "deferred tools" list.
+
+## 7. Where to go from here
 
 - **Add a new cycle pattern**: see the *Adding a cycle pattern to `classifyCycle`* section in [`README.md`](./README.md#contributing).
 - **Run a custom analysis from scratch**: every tool's input schema is documented via the MCP `tools/list` request. Hit the server with `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}` over stdio.
