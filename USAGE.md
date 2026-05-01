@@ -215,6 +215,7 @@ Once you have the diagnosis, here are useful follow-up prompts you can paste int
 | "How many `NSURLSessionConfiguration`s are *inside* the cycle rooted at `DetailViewModel`?" | `reachableFromCycle(path, rootClassName: "DetailViewModel", className: "NSURLSessionConfiguration")` |
 | "Show the retain chain that keeps `DetailViewModel` alive." | `findRetainers(path, className: "DetailViewModel")` |
 | "Compare `~/Desktop/before.memgraph` to `~/Desktop/after.memgraph` — did the leak go away?" | `diffMemgraphs(before, after)` |
+| "Did my fix actually resolve the `swiftui.tag-index-projection` cycle?" | `verifyFix(before, after, expectedPatternId: "swiftui.tag-index-projection")` — returns PASS/PARTIAL/FAIL |
 | "Render the cycle as a Mermaid graph for the PR description." | `renderCycleGraph(path, format: "mermaid")` |
 | "Profile this app on my iPhone for 90 seconds and tell me about hangs." | `listTraceDevices` → `recordTimeProfile` → `analyzeHangs` |
 | "Pull the last 5 minutes of `error`-level logs from `MyApp`." | `logShow(last: "5m", process: "MyApp", level: "default")` |

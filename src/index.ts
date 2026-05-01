@@ -74,6 +74,7 @@ import {
   getInvestigationPlaybook,
   getInvestigationPlaybookSchema,
 } from "./tools/getInvestigationPlaybook.js";
+import { verifyFix, verifyFixSchema } from "./tools/verifyFix.js";
 import {
   swiftGetSymbolDefinition,
   swiftGetSymbolDefinitionSchema,
@@ -491,6 +492,20 @@ server.registerTool(
   },
   async (input) => {
     const result = await getInvestigationPlaybook(input);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "verifyFix",
+  {
+    title: "Verify a fix actually closed the targeted retain cycle",
+    description:
+      "[mg.memory] Cycle-semantic diff. Classifies both `before` and `after` `.memgraph` snapshots and emits a per-pattern PASS/PARTIAL/FAIL verdict plus bytes freed and instances released. Use as a CI gate: if `expectedPatternId` is provided, `expectedPatternVerdict` tells you in one field whether the fix landed.\n\nPipeline: this is the natural followup to `classifyCycle` after you've shipped a fix. Capture a fresh `.memgraph`, point this at the before/after pair.",
+    inputSchema: verifyFixSchema.shape,
+  },
+  async (input) => {
+    const result = await verifyFix(input);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   },
 );

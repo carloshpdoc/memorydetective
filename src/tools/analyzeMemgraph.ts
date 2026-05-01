@@ -57,6 +57,14 @@ export interface CycleSummary {
   classesInChain: string[];
   /** Total unique class names found in the chain (the cap-aware count for context). */
   classesInChainTotal: number;
+  /**
+   * Total instance size in bytes summed across every node reachable from
+   * this cycle's root. Useful for prioritizing cycles: "breaking this one
+   * frees X bytes" — bigger first.
+   */
+  transitiveBytes: number;
+  /** Total node count reachable from this root. Heavier than `chainLength` when the cycle has wide branches. */
+  transitiveInstanceCount: number;
 }
 
 export interface AnalyzeMemgraphResult {
@@ -134,8 +142,10 @@ function summarizeCycle(
 ): CycleSummary {
   const classCounts = new Map<string, number>();
   let chainLength = 0;
+  let transitiveBytes = 0;
   const visit = (n: CycleNode) => {
     chainLength += 1;
+    if (typeof n.instanceSize === "number") transitiveBytes += n.instanceSize;
     if (n.className) {
       const short = shortenForVerbosity(n.className, verbosity);
       classCounts.set(short, (classCounts.get(short) ?? 0) + 1);
@@ -165,6 +175,8 @@ function summarizeCycle(
     chainLength,
     classesInChain: ranked,
     classesInChainTotal: classCounts.size,
+    transitiveBytes,
+    transitiveInstanceCount: chainLength,
   };
 }
 

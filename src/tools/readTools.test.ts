@@ -224,17 +224,143 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(classified[0].primaryMatch).toBeNull();
   });
 
-  it("PATTERNS array contains all 8 patterns expected for v0.1", () => {
-    const ids = PATTERNS.map((p) => p.id).sort();
-    expect(ids).toEqual([
-      "closure.viewmodel-wrapped-strong",
-      "combine.sink-store-self-capture",
-      "concurrency.task-without-weak-self",
-      "notificationcenter.observer-strong",
-      "swiftui.dictstorage-weakbox-cycle",
-      "swiftui.foreach-state-tap",
-      "swiftui.tag-index-projection",
-      "viewcontroller.uinavigationcontroller-host",
+  it("PATTERNS array contains 24 patterns in v1.4 (8 v1.0 + 16 expansion)", () => {
+    const ids = PATTERNS.map((p) => p.id);
+    expect(ids.length).toBe(24);
+    // Spot-check key v1.0 patterns are still there.
+    expect(ids).toContain("swiftui.tag-index-projection");
+    expect(ids).toContain("combine.sink-store-self-capture");
+    // Spot-check v1.4 additions.
+    expect(ids).toContain("timer.scheduled-target-strong");
+    expect(ids).toContain("urlsession.delegate-strong");
+    expect(ids).toContain("kvo.observation-not-invalidated");
+    expect(ids).toContain("coordinator.parent-strong-back-reference");
+  });
+});
+
+describe("classifyCycle — v1.4 catalog expansion", () => {
+  it("matches `combine.assign-to-self` for Combine.Assign in chain", () => {
+    const r = makeReport("MyVM", ["Combine.Assign", "MyValue"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe("combine.assign-to-self");
+  });
+
+  it("matches `timer.scheduled-target-strong` for __NSCFTimer", () => {
+    const r = makeReport("MyVM", ["__NSCFTimer", "MyHandler"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "timer.scheduled-target-strong",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("matches `displaylink.target-strong` for CADisplayLink", () => {
+    const r = makeReport("AnimationDriver", ["CADisplayLink", "Renderer"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "displaylink.target-strong",
+    );
+  });
+
+  it("matches `gesture.target-strong` for UIGestureRecognizer", () => {
+    const r = makeReport("MyVC", ["UIGestureRecognizer", "_targets"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe("gesture.target-strong");
+  });
+
+  it("matches `kvo.observation-not-invalidated` for NSKeyValueObservation", () => {
+    const r = makeReport("MyVM", ["NSKeyValueObservation", "ChangeHandler"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "kvo.observation-not-invalidated",
+    );
+  });
+
+  it("matches `urlsession.delegate-strong` for __NSURLSessionLocal", () => {
+    const r = makeReport("APIClient", [
+      "__NSURLSessionLocal",
+      "GraphQLClient",
+      "NSURLSessionConfiguration",
     ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "urlsession.delegate-strong",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("matches `swiftui.envobject-back-reference` with all three signals", () => {
+    const r = makeReport("AppViewModel", [
+      "ObservableObject",
+      "EnvironmentObjectStorage",
+      "UIHostingController",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "swiftui.envobject-back-reference",
+    );
+  });
+
+  it("matches `concurrency.asyncstream-continuation-self` for AsyncStream", () => {
+    const r = makeReport("MyVM", ["AsyncStream", "Closure context"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "concurrency.asyncstream-continuation-self",
+    );
+  });
+
+  it("matches `webkit.scriptmessage-handler-strong` for WKUserContentController", () => {
+    const r = makeReport("MyWebVC", [
+      "WKUserContentController",
+      "WKWebView",
+      "Handler",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "webkit.scriptmessage-handler-strong",
+    );
+  });
+
+  it("matches `dispatch.source-event-handler-self` for OS_dispatch_source", () => {
+    const r = makeReport("MyVM", ["OS_dispatch_source", "Closure context"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "dispatch.source-event-handler-self",
+    );
+  });
+
+  it("matches `rxswift.disposebag-self-cycle` for RxSwift.DisposeBag", () => {
+    const r = makeReport("MyVM", [
+      "RxSwift.DisposeBag",
+      "RxSwift.AnonymousDisposable",
+      "Closure context",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "rxswift.disposebag-self-cycle",
+    );
+  });
+
+  it("matches `realm.notificationtoken-retained` for RealmSwift.NotificationToken", () => {
+    const r = makeReport("RealmObserver", [
+      "RealmSwift.NotificationToken",
+      "Closure context",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "realm.notificationtoken-retained",
+    );
+  });
+
+  it("matches `coordinator.parent-strong-back-reference` for two *Coordinator nodes", () => {
+    const r = makeReport("AppCoordinator", [
+      "ProfileCoordinator",
+      "parentCoordinator",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "coordinator.parent-strong-back-reference",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
   });
 });

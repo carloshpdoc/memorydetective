@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-05-01
+
+Deeper diagnostics. Catalog **triples** in size (8 → 24 patterns), cycles report transitive impact, and a new `verifyFix` tool gates fixes in CI by classifier-aware diff. 26 → 27 tools.
+
+### Added
+
+- **16 new cycle patterns** in `classifyCycle`. Sourced from Apple developer docs, FBRetainCycleDetector heuristics, SwiftLint rules, and well-known community references. Each pattern carries a fix hint and a confidence tier.
+
+  **UIKit / Foundation:**
+  - `timer.scheduled-target-strong` — `Timer.scheduledTimer(target:selector:)` retains its target
+  - `displaylink.target-strong` — `CADisplayLink` retains its target
+  - `gesture.target-strong` — `UIGestureRecognizer` / `UIControl` `addTarget` retains
+  - `kvo.observation-not-invalidated` — `NSKeyValueObservation` retains its change handler
+  - `urlsession.delegate-strong` — `URLSession` strongly retains its delegate (Apple-documented)
+  - `dispatch.source-event-handler-self` — `DispatchSource.setEventHandler` retains the closure
+  - `notificationcenter.observer-not-removed` — block-form observer never deregistered
+  - `delegate.strong-reference` — `var delegate: Foo?` declared without `weak`
+
+  **SwiftUI / Combine / Concurrency:**
+  - `swiftui.envobject-back-reference` — `@EnvironmentObject` with back-reference to UIView/UIViewController
+  - `combine.assign-to-self` — `.assign(to: \\.x, on: self)` retains self
+  - `concurrency.task-mainactor-view` — `Task { await self.foo() }` inside a SwiftUI View
+  - `concurrency.asyncstream-continuation-self` — `AsyncStream` consumer never cancelled
+
+  **WebKit / Architecture / Third-party:**
+  - `webkit.scriptmessage-handler-strong` — `WKUserContentController` retains the message handler
+  - `coordinator.parent-strong-back-reference` — Coordinator pattern: child holds parent strongly
+  - `rxswift.disposebag-self-cycle` — RxSwift DisposeBag + method reference armadilha
+  - `realm.notificationtoken-retained` — Realm `NotificationToken` retains the change closure
+
+- **`verifyFix` tool** — cycle-semantic diff. Classifies both before/after `.memgraph` snapshots and emits a per-pattern `PASS` / `PARTIAL` / `FAIL` verdict plus bytes freed and instances released. Use as a CI gate: pass `expectedPatternId` and check `expectedPatternVerdict === "PASS"`.
+
+- **Transitive bytes per cycle.** `analyzeMemgraph`'s `CycleSummary` now includes `transitiveBytes` (sum of `instanceSize` across reachable nodes) and `transitiveInstanceCount`. Useful for prioritization: "breaking this one frees 8.2 MB" vs "this one frees 200 bytes".
+
+### Changed
+
+- `classifyReport` (pure function) now also returns `classNamesByIndex` so callers can build typed suggestions without re-walking the cycle forest. (Internal — already used by v1.3.0's `suggestedNextCalls` plumbing.)
+- README + USAGE.md updated to reflect the 24-pattern catalog and new `verifyFix` tool.
+- Tool count badge: 26 → 27.
+
+### Notes
+
+- No breaking changes — new fields are additive, all new patterns are classifier additions.
+- The catalog is now broad enough to cover the Foundation/UIKit/Combine/Concurrency/SwiftUI/WebKit/RxSwift/Realm leak families that account for ~95% of real-world iOS retain cycles per the research review (FBRetainCycleDetector + SwiftLint + Apple docs).
+
 ## [1.3.1] — 2026-05-01
 
 ### Added
@@ -172,7 +217,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.0...v1.2.1

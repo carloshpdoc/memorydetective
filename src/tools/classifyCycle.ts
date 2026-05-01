@@ -173,6 +173,276 @@ export const PATTERNS: PatternDefinition[] = [
       return hasNotif && hasClosure ? "high" : hasNotif ? "medium" : null;
     },
   },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // v1.4 catalog expansion — 12 new patterns sourced from Apple docs,
+  // FBRetainCycleDetector heuristics, SwiftLint rules, and well-known
+  // community references (Sundell, hackingwithswift, objc.io).
+  // ────────────────────────────────────────────────────────────────────────
+
+  {
+    id: "combine.assign-to-self",
+    name: "Combine `.assign(to: \\.x, on: self)` capturing self",
+    fixHint:
+      "`.assign(to: \\.x, on: self)` strongly retains `self` for the lifetime of the subscription. Switch to the property-path form `.assign(to: &$publishedProperty)` (auto-cancels with the @Published property), or rewrite as `.sink { [weak self] value in self?.x = value }`.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasAssign = classes.some(
+        (c) => c.includes("Combine.Assign") || c.includes("Subscribers.Assign"),
+      );
+      return hasAssign ? "high" : null;
+    },
+  },
+  {
+    id: "concurrency.task-mainactor-view",
+    name: "Swift `Task { }` inside a SwiftUI View capturing self",
+    fixHint:
+      "Inside `View.body`, `Task { await self.foo() }` retains the view's storage for the task's lifetime — including `@StateObject` and `@ObservedObject` references. Use `.task { ... }` modifier (auto-cancelled when the view leaves), or capture properties up front: `let vm = self.viewModel; Task { await vm.foo() }`.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasTask = classes.some(
+        (c) =>
+          c.includes("_Concurrency.Task") || /\bTask<[^>]+>/.test(c),
+      );
+      const hasView = classes.some(
+        (c) =>
+          c.includes("SwiftUI.View") ||
+          c.includes("ViewBody") ||
+          c.includes("StateObject"),
+      );
+      return hasTask && hasView ? "high" : hasTask ? "low" : null;
+    },
+  },
+  {
+    id: "notificationcenter.observer-not-removed",
+    name: "NotificationCenter observer never deregistered",
+    fixHint:
+      "When you store the `NSObjectProtocol` returned from `addObserver(forName:object:queue:using:)` on `self` but never call `NotificationCenter.default.removeObserver(_:)` in `deinit`, the center keeps the observer block alive forever. Either remove the observer in `deinit`, or use the selector-based form `addObserver(_:selector:name:object:)` which auto-deregisters on deallocation on modern OS releases.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasNotif = classes.some(
+        (c) =>
+          c.includes("NSNotificationCenter") ||
+          c.includes("NotificationCenter"),
+      );
+      const hasObserverProto = classes.some(
+        (c) =>
+          c.includes("NSObjectProtocol") || c.includes("__NSObserver"),
+      );
+      return hasNotif && hasObserverProto ? "medium" : null;
+    },
+  },
+  {
+    id: "delegate.strong-reference",
+    name: "`delegate` property declared without `weak`",
+    fixHint:
+      "Cocoa convention is that delegates are declared `weak var delegate: SomeProtocol?`. A strong delegate reference creates a cycle when the delegated object also holds the delegate's owner (e.g. a UIViewController that owns a TableView and is also its delegate). Mark the delegate property `weak`. If the delegate is a struct or value type that can't be `weak`, refactor to a closure-based callback.",
+    match: (_root, allClasses) => {
+      // Heuristic: any cycle node has an edge labelled `_delegate` or
+      // `delegate` with __strong, AND the cycle is a 2-node back-loop.
+      // We approximate "delegate" by class name suffix patterns.
+      const classes = Array.from(allClasses);
+      const hasDelegateName = classes.some(
+        (c) => /Delegate$/.test(c) || c.includes("Delegate"),
+      );
+      return hasDelegateName ? "low" : null;
+    },
+  },
+  {
+    id: "timer.scheduled-target-strong",
+    name: "Timer.scheduledTimer(target:selector:) retains its target",
+    fixHint:
+      "`Timer.scheduledTimer(timeInterval:target:selector:userInfo:repeats:)` retains its target until `invalidate()` is called, even after `repeats: false` fires. Switch to the block form `Timer.scheduledTimer(withTimeInterval:repeats:) { [weak self] _ in ... }` and store a reference so you can call `timer.invalidate()` in `deinit`. For long-lived timers on `self`, wrap in a `WeakProxy` target.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasTimer = classes.some(
+        (c) =>
+          c.includes("__NSCFTimer") ||
+          c.includes("NSTimer") ||
+          c === "Timer" ||
+          /\bTimer\b/.test(c),
+      );
+      return hasTimer ? "high" : null;
+    },
+  },
+  {
+    id: "displaylink.target-strong",
+    name: "CADisplayLink retains its target",
+    fixHint:
+      "`CADisplayLink(target:selector:)` retains its target — same pitfall as `Timer`. Use a `WeakProxy` target wrapper (`class WeakProxy: NSObject { weak var target: NSObject? }`) and forward the selector to `target` weakly. Always call `displayLink.invalidate()` in `deinit` of the owning object.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      return classes.some((c) => c.includes("CADisplayLink")) ? "high" : null;
+    },
+  },
+  {
+    id: "gesture.target-strong",
+    name: "UIGestureRecognizer / UIControl `addTarget` retains target",
+    fixHint:
+      "`addTarget(_:action:)` on `UIControl` and `UIGestureRecognizer` adds the target to an internal `_targets` array — strong by default. Either prefer the closure-based `UIAction` API (iOS 14+, UIKit handles weakly), or call `removeTarget(self, action: nil, for: .allEvents)` explicitly in `deinit`. Don't rely on the gesture being deallocated to drop the reference.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasGesture = classes.some(
+        (c) =>
+          c.includes("UIGestureRecognizer") ||
+          c.includes("UITapGesture") ||
+          c.includes("UIPanGesture") ||
+          c.includes("UIControl"),
+      );
+      return hasGesture ? "high" : null;
+    },
+  },
+  {
+    id: "kvo.observation-not-invalidated",
+    name: "`NSKeyValueObservation` token retains its change handler",
+    fixHint:
+      "`obj.observe(\\.x) { obj, change in ... }` returns a token that strongly retains the change handler — and the handler typically captures `self`. Capture self weakly: `obj.observe(\\.x) { [weak self] _, _ in self?... }`, and call `token.invalidate()` in `deinit`. Storing the token alone won't break the closure capture.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasKvo = classes.some(
+        (c) =>
+          c.includes("NSKeyValueObservation") ||
+          c.includes("_NSKeyValueObservance"),
+      );
+      return hasKvo ? "high" : null;
+    },
+  },
+  {
+    id: "urlsession.delegate-strong",
+    name: "URLSession retains its delegate strongly",
+    fixHint:
+      "`URLSession(configuration:delegate:delegateQueue:)` retains its delegate **strongly** until you call `invalidateAndCancel()` or `finishTasksAndInvalidate()` — this is documented Apple behavior, not a bug. If your owning object stores the session and is also the delegate, you have a cycle. Always invalidate the session in `deinit`.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasSession = classes.some(
+        (c) =>
+          c.includes("__NSURLSessionLocal") ||
+          c.includes("NSURLSession") ||
+          c === "URLSession" ||
+          /\bURLSession\b/.test(c),
+      );
+      return hasSession ? "high" : null;
+    },
+  },
+  {
+    id: "swiftui.envobject-back-reference",
+    name: "SwiftUI `@EnvironmentObject` with back-reference to UIView/UIViewController",
+    fixHint:
+      "An `ObservableObject` exposed via `@EnvironmentObject` outlives the view tree that consumes it. If the object stores a strong reference back to a `UIView`, `UIViewController`, or a closure that captures one (typical in `UIViewControllerRepresentable` interop), the cycle persists. Wrap UIKit references in a `weak` box, or refactor the dependency direction.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasObservable = classes.some(
+        (c) => /ViewModel$|Store$|State$/.test(c) || c.includes("ObservableObject"),
+      );
+      const hasEnvStorage = classes.some(
+        (c) =>
+          c.includes("EnvironmentObjectStorage") ||
+          c.includes("EnvironmentValues"),
+      );
+      const hasUIKit = classes.some(
+        (c) =>
+          c.includes("UIHostingController") ||
+          c.includes("UIViewRepresentable") ||
+          c.includes("UIViewControllerRepresentable"),
+      );
+      if (hasObservable && hasEnvStorage && hasUIKit) return "high";
+      if (hasEnvStorage && hasUIKit) return "medium";
+      return null;
+    },
+  },
+  {
+    id: "concurrency.asyncstream-continuation-self",
+    name: "`AsyncStream` continuation retains self via producer / onTermination",
+    fixHint:
+      "`AsyncStream`'s continuation retains its `onTermination` and producer closures. If you `for await ... in stream { /* uses self */ }` and the stream is stored on `self`, the consuming Task pins self until termination is delivered — which never happens. Capture `[weak self]` inside the loop and call `task.cancel()` in `deinit`/`onDisappear`. Nil-ing out the stream is not enough.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasStream = classes.some(
+        (c) =>
+          c.includes("AsyncStream") ||
+          c.includes("_AsyncStreamCriticalRegion"),
+      );
+      return hasStream ? "high" : null;
+    },
+  },
+  {
+    id: "webkit.scriptmessage-handler-strong",
+    name: "`WKUserContentController.add(_:name:)` retains the handler",
+    fixHint:
+      "`WKUserContentController.add(_:name:)` retains its `WKScriptMessageHandler` strongly. When the handler is the same VC that owns the WKWebView, you get `VC → WKWebView → WKUserContentController → handler (VC)`. Either wrap `self` in a `WeakScriptMessageHandler` proxy, or call `userContentController.removeScriptMessageHandler(forName:)` for every name added before the WKWebView is deallocated.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasWK = classes.some(
+        (c) =>
+          c.includes("WKUserContentController") ||
+          c.includes("WKScriptMessageHandler") ||
+          c.includes("WKWebView"),
+      );
+      return hasWK ? "high" : null;
+    },
+  },
+  {
+    id: "dispatch.source-event-handler-self",
+    name: "DispatchSource event handler closure retains self",
+    fixHint:
+      "`DispatchSourceTimer.setEventHandler { ... }` (and `setCancelHandler`) stores the closure strongly. When the source is a stored property and the handler captures `self`, you get a 3-node cycle. In `deinit`, call `source.setEventHandler {}` (clear the closure) then `source.cancel()` and `source.resume()` if it was suspended. Always capture `[weak self]` inside the handler.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasDispatch = classes.some(
+        (c) =>
+          c.includes("OS_dispatch_source") ||
+          c.includes("DispatchSource") ||
+          c.includes("DispatchWorkItem"),
+      );
+      return hasDispatch ? "high" : null;
+    },
+  },
+  {
+    id: "rxswift.disposebag-self-cycle",
+    name: "RxSwift `DisposeBag` retains subscription closures capturing self",
+    fixHint:
+      "`DisposeBag` is a stored property on `self`; subscriptions added to it retain `self` if `[weak self]` is omitted, or if you pass an unbound method reference (`subscribe(onNext: self.handle)` — Swift auto-captures the instance strongly). Always use `[weak self]` in the closure form, never pass an unbound method reference.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasRx = classes.some(
+        (c) =>
+          c.includes("RxSwift.DisposeBag") ||
+          c.includes("RxSwift.AnonymousDisposable") ||
+          c.includes("RxSwift.SinkDisposer") ||
+          c.includes("RxSwift."),
+      );
+      return hasRx ? "high" : null;
+    },
+  },
+  {
+    id: "realm.notificationtoken-retained",
+    name: "Realm `NotificationToken` retains its change closure",
+    fixHint:
+      "`Results.observe { ... }` returns a `NotificationToken` that strongly retains the change closure. Same shape as `NSKeyValueObservation`. Use `[weak self]` inside the observe closure and call `token?.invalidate()` in `deinit`.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasRealmToken = classes.some(
+        (c) =>
+          c.includes("RealmSwift.NotificationToken") ||
+          c.includes("RLMNotificationToken"),
+      );
+      return hasRealmToken ? "high" : null;
+    },
+  },
+  {
+    id: "coordinator.parent-strong-back-reference",
+    name: "Coordinator pattern: child holds parent strongly",
+    fixHint:
+      "The Coordinator pattern's canonical bug: parent holds children via `childCoordinators: [Coordinator]`, child holds `parentCoordinator` without `weak`. Mark `var parentCoordinator: Coordinator?` as `weak var parentCoordinator: Coordinator?`, and ensure `parent.childCoordinators.removeAll { $0 === finishedChild }` runs on completion.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const coordinators = classes.filter((c) => /Coordinator$/.test(c));
+      // Two distinct *Coordinator nodes in the cycle = strong indicator
+      if (coordinators.length >= 2) return "high";
+      if (coordinators.length === 1) return "low";
+      return null;
+    },
+  },
 ];
 
 /** Pure: classify each ROOT CYCLE in the parsed report. */

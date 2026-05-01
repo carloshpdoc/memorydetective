@@ -211,9 +211,11 @@ Copilot's MCP integration moves fast — if this snippet is stale, see the [VS C
 
 ## API
 
-26 MCP tools, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[meta]`) so related tools are visible at a glance.
+27 MCP tools, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[meta]`) so related tools are visible at a glance.
 
 Many tools include a `suggestedNextCalls` field in their response — a typed list of `{ tool, args, why }` entries pre-populated from the current result, so the orchestrating LLM can chain calls without re-reasoning. Start with `getInvestigationPlaybook(kind)` for the canonical sequence.
+
+The cycle classifier ships **24 named antipatterns** spanning SwiftUI, Combine, Swift Concurrency, UIKit (Timer/CADisplayLink/UIGestureRecognizer/KVO/URLSession/WebKit/DispatchSource), Coordinator pattern, and the popular third-party libs RxSwift + Realm. Each pattern has a one-line fix hint and a confidence tier.
 
 ### Read & analyze (13)
 
@@ -225,7 +227,8 @@ Many tools include a `suggestedNextCalls` field in their response — a typed li
 | `countAlive` | Count instances by class. Provide `className` for one number, or omit for top-N most-leaked classes. |
 | `reachableFromCycle` | Cycle-scoped reachability. "How many `<X>` instances are reachable from the cycle rooted at `<Y>`?" — distinguishes the actual culprit from its retained dependencies. |
 | `diffMemgraphs` | Compare two `.memgraph` snapshots: total deltas + class-count changes + cycles new/gone/persisted. |
-| `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of 8 known patterns (TagIndexProjection, ForEachState, Combine sink, Task captures, NotificationCenter observer, etc.) with confidence + fix hint. |
+| `verifyFix` | Cycle-semantic diff: per-pattern PASS/PARTIAL/FAIL verdict + bytes freed. CI-gateable. |
+| `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of **24 named antipatterns** (SwiftUI / Combine / Concurrency / UIKit / Coordinator / RxSwift / Realm) with confidence + fix hint. |
 | `analyzeHangs` | Parse `xctrace` `potential-hangs` schema; return Hang vs Microhang counts + top N longest. |
 | `analyzeAnimationHitches` | Parse `xctrace` `animation-hitches` schema; report by-type counts and how many hitches crossed Apple's user-perceptible 100ms threshold. |
 | `analyzeTimeProfile` | Parse `xctrace` `time-profile` schema; return top symbols by sample count. Reports SIGSEGV with workarounds when xctrace can't symbolicate. |
