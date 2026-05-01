@@ -11,7 +11,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "USAGE.md"
   ],
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",

@@ -1,0 +1,259 @@
+# Usage guide
+
+Walkthrough of how `memorydetective` actually works in practice — what each tool returns, how fixes flow from diagnosis to your codebase, and the architecture decision behind splitting "diagnose" from "edit".
+
+For a quick API reference, see the [`README.md`](./README.md). For the full changelog, see [`CHANGELOG.md`](./CHANGELOG.md).
+
+---
+
+## 1. Three ways to use it
+
+### 1a. CLI mode — quickest way to see it work
+
+```bash
+npm install -g memorydetective
+memorydetective --version    # 1.0.0
+
+# Run analyze on any .memgraph file
+memorydetective analyze ~/Desktop/myapp.memgraph
+```
+
+What you see (terminal output, ANSI-coloured):
+
+```
+┌─ memorydetective analyze ──────────────────────────────────────┐
+│ Path: /Users/.../myapp.memgraph
+│ Process: MyApp (pid 12345)
+│ Bundle: com.example.myapp
+└────────────────────────────────────────────────────────────────┘
+
+  60,436 leaks (7.89 MB)
+  4 ROOT CYCLE blocks
+
+  Top cycle: Swift._DictionaryStorage<SwiftUI.AnyHashable2, SwiftUI…
+    chain length: 545 nodes
+    app-level classes in chain: Closure context, DetailViewModel,
+        ItemRepositoryImpl, ItemGraphQLDataSource, GraphQLClient
+
+  Diagnosis:
+    60436 leaks; 4 ROOT CYCLE blocks. Largest top-level cycle:
+    Swift._DictionaryStorage… (chain of 545 nodes). App-level
+    classes in chains: Closure context, DetailViewModel, …
+```
+
+Then ask the classifier for fix advice:
+
+```bash
+memorydetective classify ~/Desktop/myapp.memgraph
+```
+
+You see one block per ROOT CYCLE, like:
+
+```
+  Root: Swift._DictionaryStorage<SwiftUI.AnyHashable2, SwiftUI…
+    Match: swiftui.tag-index-projection (high confidence)
+    Fix hint:
+      Replace `[weak self]` capture in tap closures with a static
+      helper, OR weak-capture the coordinator/view-model directly
+      with `[weak coord = self.coordinator]`. The `.tag()` modifier
+      on photo carousels is the usual culprit.
+    Also matched: swiftui.dictstorage-weakbox-cycle,
+                  closure.viewmodel-wrapped-strong,
+                  swiftui.foreach-state-tap
+```
+
+### 1b. JSON mode — for scripts and CI
+
+```bash
+memorydetective analyze ~/Desktop/myapp.memgraph --json | jq .totals
+memorydetective classify ~/Desktop/myapp.memgraph --json | jq '.classified[0].primaryMatch'
+```
+
+The JSON shape mirrors the MCP tool's response — same fields, no ANSI colours, ready to pipe into anything.
+
+### 1c. MCP mode — the actual product UX
+
+This is what we built it for: an LLM agent (Claude Code, Claude Desktop, Cursor, Cline, Kiro, …) drives the investigation by chat.
+
+Add to your MCP client config (Claude Code shown):
+
+```jsonc
+// ~/.claude/settings.json
+{
+  "mcpServers": {
+    "memorydetective": { "command": "memorydetective" }
+  }
+}
+```
+
+Open Claude Code in your iOS project and just ask:
+
+> Diagnose `~/Desktop/myapp.memgraph` and find where to fix in this codebase.
+
+Claude orchestrates the full flow (see [section 3](#3-how-fixes-actually-flow-from-diagnosis-to-edit)).
+
+---
+
+## 2. The 8 cycle patterns and their fix hints
+
+`classifyCycle` ships with a built-in catalog of common iOS retain-cycle patterns. Each pattern returns a `fixHint` — a plain-English string describing the fix direction.
+
+| Pattern ID | When it matches | Fix hint (summary) |
+|---|---|---|
+| `swiftui.tag-index-projection` | `TagIndexProjection<Int>` appears in chain (`.tag()` modifier capturing self) | Replace `[weak self]` capture with a static helper, or weak-capture the coordinator/view-model directly. |
+| `swiftui.dictstorage-weakbox-cycle` | Root is `_DictionaryStorage<…WeakBox<AnyLocationBase>>` | SwiftUI internal observation graph cycle. Find your app-level types in the chain and break the strong capture there. |
+| `swiftui.foreach-state-tap` | `SwiftUI.ForEachState` in chain | ForEachState held by a tap-gesture closure capturing `self`. Make the tap handler a static function or capture properties weakly. |
+| `closure.viewmodel-wrapped-strong` | `__strong` edge with `_viewModel.wrappedValue` in label | Closure captures `_viewModel.wrappedValue` strongly. Capture the underlying ObservableObject weakly: `[weak vm = _viewModel.wrappedValue]`. |
+| `viewcontroller.uinavigationcontroller-host` | `UINavigationController` + `UIHostingController` both in chain | Clear `viewControllers = []` in `dismantleUIViewController` to break the host->VC->host cycle. |
+| `combine.sink-store-self-capture` | `AnyCancellable` + `Closure context` | `.sink { self.x = … }` keeps self alive through the AnyCancellable that's stored on self. Capture explicitly: `.sink { [weak self] in self?.x = … }`. |
+| `concurrency.task-without-weak-self` | `_Concurrency.Task<…>` + `Closure context` | `Task { }` body strongly captures self for the lifetime of the task. `Task { [weak self] in guard let self else { return }; … }`. |
+| `notificationcenter.observer-strong` | `NotificationCenter` / `NSNotificationCenter` + `Closure context` | Block-form `addObserver(forName:...)` keeps the block alive in the center. Use `[weak self]` in the block, or store the returned `NSObjectProtocol` and call `removeObserver(_:)` in `deinit`. |
+
+**Confidence tiers**: each pattern is checked at `high` first, then `medium`. If multiple patterns fire on the same cycle, all matches are returned — the highest-confidence one is `primaryMatch`, the rest are in `allMatches`.
+
+**The hints are deliberately textual, not code patches.** That's by design — see the next section.
+
+---
+
+## 3. How fixes actually flow from diagnosis to edit
+
+`memorydetective` is the **diagnose** side. It tells you **what** is wrong, **where in the cycle**, and **what type of fix** is needed. It does **not** edit your code.
+
+The **edit** side comes from your LLM agent (Claude Code, Cursor, Cline, …) using its native code-editing tools (Read, Grep, Edit, …).
+
+This split is intentional:
+
+- The fix depends on your real code (file paths, surrounding context, naming). `memorydetective` knows nothing about your codebase.
+- LLM agents already excel at code editing. Letting them keep that role keeps `memorydetective` focused.
+- The catalog of known patterns becomes the knowledge moat; the LLM brings the codebase awareness.
+
+### Concrete end-to-end example
+
+Configuration (one-time): `memorydetective` registered as an MCP server in Claude Code, as shown in [section 1c](#1c-mcp-mode--the-actual-product-ux).
+
+You open Claude Code in your iOS project and ask:
+
+> **You:** I exported `~/Desktop/myapp.memgraph` after closing some detail screens — something is leaking. Diagnose and find where to fix in this codebase.
+
+What Claude does, step by step:
+
+1. **Calls `analyzeMemgraph(path: "~/Desktop/myapp.memgraph")`**
+   - Receives: 60,436 leaks, 4 ROOT CYCLE blocks, top cycle is a `_DictionaryStorage` chain.
+
+2. **Calls `classifyCycle(path: "~/Desktop/myapp.memgraph")`**
+   - Receives: pattern `swiftui.tag-index-projection` (high confidence) + fix hint about `.tag()` and weak capture.
+
+3. **Uses its own code-editing tools to find the offending file:**
+   - `Grep` for `.tag(` in your `*.swift` files.
+   - `Grep` for `onImageSliderTap` (or whatever closure name surfaced in the chain).
+   - `Read` the candidate files to see how the closure is captured.
+
+4. **Presents the proposed fix in chat:**
+
+   > **Claude:** Found the cycle. `WishlistPlaceDetailsView.swift:142` passes `onImageSliderTap` as a closure that captures `self`. The `.tag(index)` modifier on the carousel `ForEach` is what triggers the SwiftUI internal `TagIndexProjection` observation that pins the cycle.
+   >
+   > Suggested fix: hoist the handler to a `static` function and capture only what's needed weakly:
+   > ```swift
+   > // before
+   > onImageSliderTap: { index in
+   >     self.viewModel.handlePhotoTap(at: index)
+   > }
+   >
+   > // after
+   > onImageSliderTap: { [weak vm = _viewModel.wrappedValue,
+   >                      weak coord = self.coordinator] index in
+   >     Self.handlePhotoTap(index: index, viewModel: vm, coordinator: coord)
+   > }
+   >
+   > // plus a static helper:
+   > private static func handlePhotoTap(
+   >     index: Int,
+   >     viewModel: DetailViewModel?,
+   >     coordinator: DetailsCoordinator?
+   > ) { /* ... */ }
+   > ```
+   >
+   > Want me to apply this?
+
+5. **You accept** → Claude calls its own `Edit` tool → diff appears in your IDE → you review and commit.
+
+6. **(Optional) Verify the fix:** export a fresh `.memgraph` after running the same flow, then ask Claude:
+
+   > **You:** Did the fix work? Compare `~/Desktop/myapp-before.memgraph` to `~/Desktop/myapp-after.memgraph`.
+
+   Claude calls `diffMemgraphs` — instance counts dropped, the `swiftui.tag-index-projection` cycle is gone from `cycles.persisted`, present in `cycles.goneFromBefore`.
+
+### Why this is better than "memorydetective generates the diff"
+
+If `memorydetective` tried to generate a code patch, it would have to:
+- Parse Swift source
+- Understand the file's import graph
+- Track the actual variable names and types in scope
+- Match surrounding code style
+
+That's exactly what an LLM agent already does — and does well. Splitting the responsibility keeps each side simple. `memorydetective` knows **iOS perf**; the agent knows **your codebase**. They compose.
+
+---
+
+## 4. Common follow-up requests
+
+Once you have the diagnosis, here are useful follow-up prompts you can paste into Claude:
+
+| Prompt | What Claude calls |
+|---|---|
+| "How many `DetailViewModel` instances are leaking?" | `countAlive(path, className: "DetailViewModel")` |
+| "Show the retain chain that keeps `DetailViewModel` alive." | `findRetainers(path, className: "DetailViewModel")` |
+| "Compare `~/Desktop/before.memgraph` to `~/Desktop/after.memgraph` — did the leak go away?" | `diffMemgraphs(before, after)` |
+| "Render the cycle as a Mermaid graph for the PR description." | `renderCycleGraph(path, format: "mermaid")` |
+| "Profile this app on my iPhone for 90 seconds and tell me about hangs." | `listTraceDevices` → `recordTimeProfile` → `analyzeHangs` |
+| "Pull the last 5 minutes of `error`-level logs from `MyApp`." | `logShow(last: "5m", process: "MyApp", level: "default")` |
+| "Run my XCUITest with leak detection." | `detectLeaksInXCUITest(workspace, scheme, testIdentifier, …)` |
+
+The agent decides which tool to call based on your prompt — you don't need to remember the tool names.
+
+---
+
+## 5. Troubleshooting
+
+### `memorydetective: command not found`
+
+The npm global install isn't on your `$PATH`. Check:
+
+```bash
+which memorydetective
+npm prefix -g
+```
+
+If `npm prefix -g` returns something not in your `$PATH`, add it. Or use the binary directly:
+
+```bash
+$(npm prefix -g)/bin/memorydetective --version
+```
+
+### `analyzeTimeProfile` returns a SIGSEGV notice
+
+Known limit. `xcrun xctrace export` of the `time-profile` schema crashes on heavy unsymbolicated traces. Workarounds (in order of effort):
+
+1. Open the trace once in Instruments.app (forces symbolication), then close it. Re-run `analyzeTimeProfile`.
+2. Re-record with a shorter `--time-limit` (try 30 s instead of 90 s).
+3. For hang analysis specifically, use `analyzeHangs` instead — it parses a different (lighter) schema that doesn't crash.
+
+### `captureMemgraph` fails on a physical iOS device
+
+By design. `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device goes through Xcode's debugger over USB — different mechanism, no public CLI equivalent. Use Xcode's Memory Graph button + File → Export Memory Graph for physical devices.
+
+### Tests pass locally but fail in CI
+
+The stress test has a wallclock budget that's tighter on slower runners. If you see `expected NNNms to be less than 2000`, bump `PARSE_BUDGET_MS` in `src/stress.test.ts`.
+
+### `detectLeaksInXCUITest` says "after-capture failed"
+
+The app process exited before `leaks --outputGraph` could attach. Configure your XCUITest to keep the app alive at end-of-test (e.g. `XCTAssertTrue(true); _ = XCTWaiter.wait(for: [...], timeout: 1.0)`), or use a longer simulator boot. This tool is **experimental** in v1.0 — feedback welcome.
+
+---
+
+## 6. Where to go from here
+
+- **Add a new cycle pattern**: see the *Adding a cycle pattern to `classifyCycle`* section in [`README.md`](./README.md#contributing).
+- **Run a custom analysis from scratch**: every tool's input schema is documented via the MCP `tools/list` request. Hit the server with `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}` over stdio.
+- **Open an issue**: https://github.com/carloshpdoc/memorydetective/issues — bug reports, feature requests, and pattern contributions are all welcome.

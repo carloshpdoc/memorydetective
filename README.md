@@ -40,7 +40,7 @@ memorydetective analyze   ~/Desktop/myapp.memgraph
 memorydetective classify  ~/Desktop/myapp.memgraph
 ```
 
-→ See [Examples](#examples) for chat-driven flows · [API](#api) for the full tool reference · [Configure](#configure) for Claude Desktop / Cursor / Cline.
+→ See [Examples](#examples) for chat-driven flows · [API](#api) for the full tool reference · [Configure](#configure) for Claude Desktop / Cursor / Cline · [USAGE.md](./USAGE.md) for the full walkthrough including how fixes flow from diagnosis to your codebase.
 
 ---
 
