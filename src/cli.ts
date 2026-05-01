@@ -27,7 +27,7 @@ const C = {
   gray: "\x1b[90m",
 };
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 const HELP = `${C.bold}memorydetective${C.reset} — iOS leak hunting from the CLI
 

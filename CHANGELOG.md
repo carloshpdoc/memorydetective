@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-05-01
+
+### Added
+
+- `USAGE.md` walkthrough covering the three usage modes (CLI, `--json`, MCP), the 8 cycle patterns and their fix hints, the end-to-end flow of how fixes go from diagnosis to a code edit (memorydetective diagnoses; the LLM agent applies the edit using its own code-editing tools), common follow-up prompts, and troubleshooting. README links to it from the Quickstart pointer line.
+- `USAGE.md` is included in the npm tarball (added to `package.json` `files` whitelist).
+
+### Changed
+
+- No code changes from `1.0.0` — this is a documentation bump.
+
 ## [1.0.0] — 2026-05-01
 
 First public release. **19 MCP tools** for iOS leak hunting and performance investigation, plus a thin CLI mode for scripting and CI.
@@ -63,5 +74,6 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/carloshpdoc/memorydetective/releases/tag/v1.0.0
