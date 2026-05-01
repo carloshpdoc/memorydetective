@@ -117,15 +117,18 @@ Claude orchestrates the full flow (see [section 3](#3-how-fixes-actually-flow-fr
 
 ## 3. How fixes actually flow from diagnosis to edit
 
-`memorydetective` is the **diagnose** side. It tells you **what** is wrong, **where in the cycle**, and **what type of fix** is needed. It does **not** edit your code.
+`memorydetective` covers the diagnose side **and the source-bridging side**. It tells you **what** is wrong, **where in the cycle**, **what type of fix** is needed, **where the relevant types live in your project** (via Swift LSP integration), and **every callsite that references them**. It does not edit your code — that final step still belongs to your LLM agent.
 
-The **edit** side comes from your LLM agent (Claude Code, Cursor, Cline, …) using its native code-editing tools (Read, Grep, Edit, …).
+So the workflow has two halves:
 
-This split is intentional:
+| Half | Owned by `memorydetective` | Owned by the LLM agent |
+|---|---|---|
+| **Diagnose** | ✅ memgraph parsing, cycle classification, fix-hint catalog, hangs / allocations / app-launch / animation hitches | |
+| **Locate in source** | ✅ `swiftGetSymbolDefinition`, `swiftFindSymbolReferences`, `swiftSearchPattern`, `swiftGetSymbolsOverview`, `swiftGetHoverInfo` (SourceKit-LSP under the hood) | |
+| **Decide the actual edit** | | ✅ The agent reads the surrounding code, picks the right capture-list pattern, writes the diff |
+| **Apply the edit** | | ✅ The agent's `Edit`/`MultiEdit` tools write to the user's file |
 
-- The fix depends on your real code (file paths, surrounding context, naming). `memorydetective` knows nothing about your codebase.
-- LLM agents already excel at code editing. Letting them keep that role keeps `memorydetective` focused.
-- The catalog of known patterns becomes the knowledge moat; the LLM brings the codebase awareness.
+The split between "locate" (us) and "edit" (the agent) is intentional. Locating is a deterministic SourceKit-LSP query; editing requires understanding the user's surrounding code style, naming conventions, and intent — that's the LLM's strength. We give the agent every piece of structured information it needs to make the edit, and step back at the file-write boundary.
 
 ### Concrete end-to-end example
 
@@ -133,39 +136,45 @@ Configuration (one-time): `memorydetective` registered as an MCP server in Claud
 
 You open Claude Code in your iOS project and ask:
 
-> **You:** I exported `~/Desktop/myapp.memgraph` after closing some detail screens — something is leaking. Diagnose and find where to fix in this codebase.
+> **You:** Tem um leak. Memgraph em `~/Desktop/example-leaks.memgraph`. The cycle points at `DetailViewModel`. Find where it lives in the project `~/Development/myapp/` and suggest a fix.
 
 What Claude does, step by step:
 
-1. **Calls `analyzeMemgraph(path: "~/Desktop/myapp.memgraph")`**
-   - Receives: 60,436 leaks, 4 ROOT CYCLE blocks, top cycle is a `_DictionaryStorage` chain.
+1. **Calls `analyzeMemgraph(path)`**
+   - Receives: 60,436 leaks, 4 ROOT CYCLE blocks, top cycle is a `_DictionaryStorage` chain. App-level classes in chain: `DetailViewModel`, `GraphQLClient`, `ItemRepositoryImpl`.
 
-2. **Calls `classifyCycle(path: "~/Desktop/myapp.memgraph")`**
-   - Receives: pattern `swiftui.tag-index-projection` (high confidence) + fix hint about `.tag()` and weak capture.
+2. **Calls `classifyCycle(path)`**
+   - Receives: `swiftui.tag-index-projection` (high confidence) + fix hint pointing at `.tag()` modifier capturing `self`.
 
-3. **Uses its own code-editing tools to find the offending file:**
-   - `Grep` for `.tag(` in your `*.swift` files.
-   - `Grep` for `onImageSliderTap` (or whatever closure name surfaced in the chain).
-   - `Read` the candidate files to see how the closure is captured.
+3. **Calls `reachableFromCycle({ rootClassName: "DetailViewModel" })`**
+   - Confirms 4 `DetailViewModel` instances and ~1100 `NSURLSessionConfiguration`s reachable from each — the VM is the culprit pinning the network stack as collateral, not the other way around.
 
-4. **Presents the proposed fix in chat:**
+4. **Calls `swiftSearchPattern({ pattern: "\\.tag\\(", filePath: "..." })` across views**
+   - Surfaces 1 match in `MyApp/Views/MediaCarousel.swift:142`.
 
-   > **Claude:** Found the cycle. `WishlistPlaceDetailsView.swift:142` passes `onImageSliderTap` as a closure that captures `self`. The `.tag(index)` modifier on the carousel `ForEach` is what triggers the SwiftUI internal `TagIndexProjection` observation that pins the cycle.
+5. **Calls `swiftGetSymbolDefinition({ symbolName: "DetailViewModel", projectRoot: "~/Development/myapp/", candidatePaths: ["MyApp/ViewModels/"] })`**
+   - Returns `MyApp/ViewModels/DetailViewModel.swift:18` — `class DetailViewModel: ObservableObject`.
+
+6. **Calls `swiftFindSymbolReferences({ symbolName: "DetailViewModel", filePath: "..." })`**
+   - Lists 7 callsites across the codebase. Helps the agent gauge fix blast radius.
+
+7. **Presents the proposed fix in chat:**
+
+   > **Claude:** Found the cycle. `MediaCarousel.swift:142` passes `onImageSliderTap` as a closure that captures `self`. The `.tag(index)` modifier on the carousel `ForEach` triggers the SwiftUI internal `TagIndexProjection` observation that pins `DetailViewModel`.
    >
-   > Suggested fix: hoist the handler to a `static` function and capture only what's needed weakly:
+   > Suggested fix:
    > ```swift
    > // before
    > onImageSliderTap: { index in
    >     self.viewModel.handlePhotoTap(at: index)
    > }
    >
-   > // after
+   > // after — static helper + weak captures
    > onImageSliderTap: { [weak vm = _viewModel.wrappedValue,
    >                      weak coord = self.coordinator] index in
    >     Self.handlePhotoTap(index: index, viewModel: vm, coordinator: coord)
    > }
    >
-   > // plus a static helper:
    > private static func handlePhotoTap(
    >     index: Int,
    >     viewModel: DetailViewModel?,
@@ -175,11 +184,11 @@ What Claude does, step by step:
    >
    > Want me to apply this?
 
-5. **You accept** → Claude calls its own `Edit` tool → diff appears in your IDE → you review and commit.
+8. **You accept** → Claude calls its own `Edit` tool → diff appears in your IDE → you review and commit.
 
-6. **(Optional) Verify the fix:** export a fresh `.memgraph` after running the same flow, then ask Claude:
+9. **(Optional) Verify the fix:** export a fresh `.memgraph` after running the same flow, then ask Claude:
 
-   > **You:** Did the fix work? Compare `~/Desktop/myapp-before.memgraph` to `~/Desktop/myapp-after.memgraph`.
+   > **You:** Did the fix work? Compare `~/Desktop/before.memgraph` to `~/Desktop/after.memgraph`.
 
    Claude calls `diffMemgraphs` — instance counts dropped, the `swiftui.tag-index-projection` cycle is gone from `cycles.persisted`, present in `cycles.goneFromBefore`.
 
@@ -202,12 +211,19 @@ Once you have the diagnosis, here are useful follow-up prompts you can paste int
 | Prompt | What Claude calls |
 |---|---|
 | "How many `DetailViewModel` instances are leaking?" | `countAlive(path, className: "DetailViewModel")` |
+| "How many `NSURLSessionConfiguration`s are *inside* the cycle rooted at `DetailViewModel`?" | `reachableFromCycle(path, rootClassName: "DetailViewModel", className: "NSURLSessionConfiguration")` |
 | "Show the retain chain that keeps `DetailViewModel` alive." | `findRetainers(path, className: "DetailViewModel")` |
 | "Compare `~/Desktop/before.memgraph` to `~/Desktop/after.memgraph` — did the leak go away?" | `diffMemgraphs(before, after)` |
 | "Render the cycle as a Mermaid graph for the PR description." | `renderCycleGraph(path, format: "mermaid")` |
 | "Profile this app on my iPhone for 90 seconds and tell me about hangs." | `listTraceDevices` → `recordTimeProfile` → `analyzeHangs` |
 | "Pull the last 5 minutes of `error`-level logs from `MyApp`." | `logShow(last: "5m", process: "MyApp", level: "default")` |
 | "Run my XCUITest with leak detection." | `detectLeaksInXCUITest(workspace, scheme, testIdentifier, …)` |
+| **Source bridging — combine with the memory tools above:** | |
+| "Where is `DetailViewModel` declared in this project?" | `swiftGetSymbolDefinition(symbolName, candidatePaths)` |
+| "Find every reference to `DetailViewModel` across the codebase." | `swiftFindSymbolReferences(symbolName, filePath)` |
+| "What types live in `MediaCarousel.swift`?" | `swiftGetSymbolsOverview(filePath)` |
+| "What's the type at this position in this file?" | `swiftGetHoverInfo(filePath, line, character)` |
+| "Search for `[weak self]` captures in this file." | `swiftSearchPattern(filePath, pattern: "\\[weak self\\]")` |
 
 The agent decides which tool to call based on your prompt — you don't need to remember the tool names.
 

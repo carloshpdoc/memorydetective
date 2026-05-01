@@ -72,6 +72,40 @@ memorydetective classify  ~/Desktop/myapp.memgraph
 > **Claude:** *(calls `listTraceDevices` → `recordTimeProfile` → `analyzeHangs`)*
 > Recorded `~/Desktop/run.trace` (90s, attached to DemoApp on iPhone 17 Pro Max). Found **23 user-visible hangs** (>500 ms each), longest 1.16 s, average 769 ms — severe load. All on the main thread. Sample-level hotspots aren't symbolicated yet; open the trace in Instruments for that step (or wait for `analyzeTimeProfile` v0.2).
 
+### End-to-end: leak → file → fix suggestion
+
+The full loop, from artifact to code edit. Combines memory-graph analysis with Swift source-bridging.
+
+> **You:** Tem um leak. Memgraph em `~/Desktop/example-leaks.memgraph`. The cycle points at `DetailViewModel`. Find where it lives in the project `~/Development/myapp/` and suggest a fix.
+>
+> **Claude:** *(calls `analyzeMemgraph` → `classifyCycle` → `reachableFromCycle`)*
+> Found **4 ROOT CYCLE blocks**. The dominant one matches `swiftui.tag-index-projection` with high confidence. `reachableFromCycle` confirms 4 `DetailViewModel` instances pinning ~1100 `NSURLSessionConfiguration`s each — the VM is the culprit, the network stack is collateral.
+>
+> *(calls `swiftSearchPattern` to locate `.tag(` + `onImageSliderTap` patterns in `~/Development/myapp/Sources/`)*
+> 1 match in `MyApp/Views/MediaCarousel.swift:142`.
+>
+> *(calls `swiftGetSymbolDefinition({ symbolName: "DetailViewModel", projectRoot: "...", candidatePaths: ["MyApp/ViewModels/"] })`)*
+> Declared at `MyApp/ViewModels/DetailViewModel.swift:18` — `class DetailViewModel: ObservableObject`.
+>
+> *(calls `swiftFindSymbolReferences` to scope the blast radius — 7 callsites)*
+>
+> **Suggested fix at `MediaCarousel.swift:142`:**
+> ```swift
+> // before
+> .tag(index)
+> .onImageSliderTap { index in
+>     self.viewModel.handlePhotoTap(at: index)
+> }
+>
+> // after — static helper + weak captures
+> .tag(index)
+> .onImageSliderTap { [weak vm = _viewModel.wrappedValue,
+>                      weak coord = self.coordinator] index in
+>     Self.handlePhotoTap(index: index, viewModel: vm, coordinator: coord)
+> }
+> ```
+> Want me to apply this and verify with a fresh `.memgraph`?
+
 ---
 
 ## Configure

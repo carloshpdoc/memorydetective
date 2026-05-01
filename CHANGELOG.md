@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-05-01
+
+### Added
+
+- README: new fourth example "End-to-end: leak → file → fix suggestion" walking through the complete chat-driven workflow with v1.2's Swift source-bridging tools.
+- USAGE.md: section 4 ("Common follow-up requests") expanded with prompts that exercise `swiftGetSymbolDefinition`, `swiftFindSymbolReferences`, `swiftGetSymbolsOverview`, `swiftGetHoverInfo`, `swiftSearchPattern`. New `reachableFromCycle` row added.
+- USAGE.md: section 3 ("How fixes flow") rewritten to reflect the new responsibility split — `memorydetective` now covers diagnose **and** source bridging; the agent owns "decide and apply the edit".
+
+### Changed
+
+- USAGE.md concrete end-to-end example replaced with a richer 9-step flow that exercises memgraph analysis + `reachableFromCycle` + Swift LSP tools end-to-end.
+
+### Notes
+
+- Doc-only release. No code changes from `1.2.0`.
+
 ## [1.2.0] — 2026-05-01
 
 Swift source-bridging. The agent can now go from "found a leak in the cycle" to "find the file/line in this project" without leaving chat. 20 → 25 tools.
@@ -119,7 +135,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.0.0...v1.0.1
