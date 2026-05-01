@@ -1,0 +1,78 @@
+name: Bug report
+description: A tool returned wrong output, the server failed to start, or something else broke.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Specific reproducers and version info make this 5x easier to act on.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the failure mode in one or two sentences.
+      placeholder: e.g. "analyzeMemgraph crashes with 'leaks failed (code 139)' on a 200 MB .memgraph from a Mac app."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Steps to reproduce. Paste the exact command you ran (CLI mode) or the JSON-RPC request that failed (MCP mode).
+      placeholder: |
+        $ memorydetective analyze ~/Desktop/myapp.memgraph
+        # ... (output or error)
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: false
+
+  - type: input
+    id: memorydetective-version
+    attributes:
+      label: memorydetective version
+      description: Output of `memorydetective --version`
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: Output of `sw_vers -productVersion`
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: MCP client (if applicable)
+      description: e.g. Claude Code 1.x, Claude Desktop, Cursor, Cline, none (CLI only)
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Logs, related issues, screenshots, or memgraph/trace fixtures (please don't share files containing private app data).
+    validations:
+      required: false

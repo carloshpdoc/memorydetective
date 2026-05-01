@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm test
+
+  # Subprocess-driven tools (analyzeMemgraph, recordTimeProfile, etc.) need
+  # macOS-only binaries (`leaks`, `xcrun xctrace`). The unit suite covers their
+  # pure-function paths; this smoke job just confirms the published binary
+  # starts cleanly on macOS so platform-specific regressions surface in CI.
+  smoke-macos:
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: CLI smoke (--version)
+        run: node dist/index.js --version
+
+      - name: CLI smoke (--help)
+        run: node dist/index.js --help

@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<trace-query-result>
+<node xpath='//trace-toc[1]/run[1]/data[1]/table[10]'><schema name="potential-hangs"><col><mnemonic>start</mnemonic><name>Start</name><engineering-type>start-time</engineering-type></col><col><mnemonic>duration</mnemonic><name>Duration</name><engineering-type>duration</engineering-type></col><col><mnemonic>hang-type</mnemonic><name>Hang Type</name><engineering-type>hang-type</engineering-type></col><col><mnemonic>thread</mnemonic><name>Thread</name><engineering-type>thread</engineering-type></col><col><mnemonic>process</mnemonic><name>Process</name><engineering-type>process</engineering-type></col></schema><row><start-time id="1" fmt="00:27.967.573">27967573916</start-time><duration id="2" fmt="297.30 ms">297298709</duration><hang-type id="3" fmt="Microhang">Microhang</hang-type><thread id="4" fmt="Main Thread 0x66c7c0 (DemoApp, pid: 12345)"><tid id="5" fmt="0x66c7c0">6735808</tid><process id="6" fmt="DemoApp (12345)"><pid id="7" fmt="12345">12345</pid><device-session id="8" fmt="TODO">TODO</device-session></process></thread><process ref="6"/></row>
+<row><start-time id="9" fmt="00:29.402.982">29402982583</start-time><duration id="10" fmt="250.45 ms">250451542</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="11" fmt="00:30.290.201">30290201166</start-time><duration id="12" fmt="250.10 ms">250099709</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="13" fmt="00:31.413.751">31413751500</start-time><duration id="14" fmt="350.75 ms">350752125</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="15" fmt="00:33.197.216">33197216208</start-time><duration id="16" fmt="326.10 ms">326100208</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="17" fmt="00:34.129.435">34129435958</start-time><duration id="18" fmt="320.37 ms">320374125</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="19" fmt="00:34.797.389">34797389291</start-time><duration id="20" fmt="387.39 ms">387394625</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="21" fmt="00:36.380.830">36380830208</start-time><duration id="22" fmt="367.63 ms">367633958</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="23" fmt="00:37.380.294">37380294125</start-time><duration id="24" fmt="316.07 ms">316072291</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="25" fmt="00:39.235.285">39235285583</start-time><duration id="26" fmt="480.30 ms">480298292</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="27" fmt="00:42.252.220">42252220708</start-time><duration id="28" fmt="500.47 ms">500469250</duration><hang-type id="29" fmt="Hang">Hang</hang-type><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="30" fmt="00:43.367.009">43367009916</start-time><duration id="31" fmt="438.12 ms">438121292</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="32" fmt="00:43.805.133">43805133041</start-time><duration id="33" fmt="582.69 ms">582691042</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="34" fmt="00:46.119.241">46119241083</start-time><duration id="35" fmt="552.07 ms">552073000</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="36" fmt="00:47.277.524">47277524791</start-time><duration id="37" fmt="493.43 ms">493433709</duration><hang-type ref="3"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="38" fmt="00:47.770.960">47770960125</start-time><duration id="39" fmt="670.30 ms">670301458</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="40" fmt="00:50.152.923">50152923708</start-time><duration id="41" fmt="582.75 ms">582749417</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="42" fmt="00:51.340.376">51340376333</start-time><duration id="43" fmt="519.10 ms">519099083</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="44" fmt="00:51.859.477">51859477291</start-time><duration id="45" fmt="690.85 ms">690847292</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="46" fmt="00:55.186.746">55186746791</start-time><duration id="47" fmt="591.51 ms">591505542</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="48" fmt="00:56.384.000">56384000250</start-time><duration id="49" fmt="608.88 ms">608884666</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="50" fmt="00:59.328.790">59328790958</start-time><duration id="51" fmt="692.84 ms">692844333</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="52" fmt="01:04.479.222">64479222500</start-time><duration id="53" fmt="720.12 ms">720122541</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="54" fmt="01:05.813.690">65813690416</start-time><duration id="55" fmt="761.00 ms">760997542</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="56" fmt="01:09.263.033">69263033000</start-time><duration id="57" fmt="796.52 ms">796524416</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="58" fmt="01:12.329.998">72329998625</start-time><duration id="59" fmt="827.05 ms">827053000</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="60" fmt="01:13.769.644">73769644875</start-time><duration id="61" fmt="764.93 ms">764929041</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="62" fmt="01:15.796.959">75796959708</start-time><duration id="63" fmt="932.92 ms">932922917</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="64" fmt="01:19.797.306">79797306375</start-time><duration id="65" fmt="939.23 ms">939231625</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="66" fmt="01:21.347.123">81347123750</start-time><duration id="67" fmt="887.49 ms">887488333</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="68" fmt="01:22.664.264">82664264958</start-time><duration id="69" fmt="904.52 ms">904521500</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="70" fmt="01:23.568.787">83568787708</start-time><duration id="71" fmt="1.13 s">1126530750</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="72" fmt="01:25.627.039">85627039125</start-time><duration id="73" fmt="1.09 s">1093081333</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="74" fmt="01:29.010.681">89010681625</start-time><duration id="75" fmt="1.16 s">1164318500</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+<row><start-time id="76" fmt="01:30.791.905">90791905916</start-time><duration id="77" fmt="782.67 ms">782668077</duration><hang-type ref="29"/><thread ref="4"/><process ref="6"/></row>
+</node></trace-query-result>
