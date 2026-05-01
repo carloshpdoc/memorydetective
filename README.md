@@ -4,7 +4,8 @@
 
 [![npm](https://img.shields.io/npm/v/memorydetective.svg)](https://www.npmjs.com/package/memorydetective)
 [![CI](https://github.com/carloshpdoc/memorydetective/actions/workflows/ci.yml/badge.svg)](https://github.com/carloshpdoc/memorydetective/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/carloshpdoc/memorydetective?style=flat&logo=github)](https://github.com/carloshpdoc/memorydetective/stargazers)
 [![macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen.svg)](#requirements)
 
@@ -176,9 +177,9 @@ Copilot's MCP integration moves fast — if this snippet is stale, see the [VS C
 
 ## API
 
-19 MCP tools, grouped by purpose.
+20 MCP tools, grouped by purpose.
 
-### Read & analyze (12)
+### Read & analyze (13)
 
 | Tool | What |
 |---|---|
@@ -186,6 +187,7 @@ Copilot's MCP integration moves fast — if this snippet is stale, see the [VS C
 | `findCycles` | Extract just the ROOT CYCLE blocks as flattened chains, with optional `className` substring filter. |
 | `findRetainers` | "Who is keeping `<class>` alive?" — returns retain chain paths from a top-level node down to the match. |
 | `countAlive` | Count instances by class. Provide `className` for one number, or omit for top-N most-leaked classes. |
+| `reachableFromCycle` | Cycle-scoped reachability. "How many `<X>` instances are reachable from the cycle rooted at `<Y>`?" — distinguishes the actual culprit from its retained dependencies. |
 | `diffMemgraphs` | Compare two `.memgraph` snapshots: total deltas + class-count changes + cycles new/gone/persisted. |
 | `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of 8 known patterns (TagIndexProjection, ForEachState, Combine sink, Task captures, NotificationCenter observer, etc.) with confidence + fix hint. |
 | `analyzeHangs` | Parse `xctrace` `potential-hangs` schema; return Hang vs Microhang counts + top N longest. |
@@ -293,17 +295,19 @@ If `memorydetective` saves you time, you can support continued development:
 
 Every contribution helps keep this maintained and documented.
 
-## Roadmap
-
-- **v0.1.x** (current) — 12 MCP tools, 8 cycle patterns, CLI mode.
-- **v0.2** — community-contributable cycle catalog, Claude Code plugin (`/plugin install memorydetective`), close the `analyzeTimeProfile` SIGSEGV gap. Design docs in [docs/](./docs/).
-- **Phase 3** (gated) — GitHub Action + SaaS dashboard for PR-time leak detection.
-
-See [docs/v0.2-roadmap.md](./docs/v0.2-roadmap.md) for the full plan.
-
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Apache 2.0 — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
+
+Permits commercial use, modification, distribution, patent use. Includes attribution clause via the `NOTICE` file.
+
+## Companion MCPs
+
+`memorydetective` focuses on memory-graph and trace artifacts. To bridge "found this leak in the cycle" with "find it in your codebase", pair it with a Swift source-aware MCP. Recommended:
+
+- [SwiftLens](https://github.com/swiftlens/swiftlens) — wraps SourceKit-LSP for Swift symbol lookup, reference search, hover info. Different license model (non-commercial); read its terms before using in a paid product.
+
+A future version of `memorydetective` may include a similar source-bridging surface natively under Apache 2.0; see the v1.2 roadmap notes in the design docs.
 
 ## Why "memorydetective"?
 

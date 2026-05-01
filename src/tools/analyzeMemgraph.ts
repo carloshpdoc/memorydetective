@@ -3,6 +3,10 @@ import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
 import { parseLeaksOutput, rootCyclesOnly } from "../parsers/leaksOutput.js";
+import {
+  shortenForVerbosity,
+  type Verbosity,
+} from "../parsers/shortenClassName.js";
 import type { CycleNode, LeaksReport } from "../types.js";
 
 export const analyzeMemgraphSchema = z.object({
@@ -18,6 +22,21 @@ export const analyzeMemgraphSchema = z.object({
     .describe(
       "When true, include the full nested retain chains in the response. Default false returns only top-level ROOT CYCLE summaries to keep payloads small.",
     ),
+  verbosity: z
+    .enum(["compact", "normal", "full"])
+    .default("compact")
+    .describe(
+      "Class-name verbosity. `compact` (default) drops module prefixes, collapses nested SwiftUI ModifiedContent into `+N modifiers`, and truncates deep generics with a hash placeholder. `normal` keeps more detail. `full` returns Swift demangled names verbatim.",
+    ),
+  maxClassesInChain: z
+    .number()
+    .int()
+    .positive()
+    .max(50)
+    .default(10)
+    .describe(
+      "Cap on how many unique class names to surface per cycle's `classesInChain` array. Default 10 — enough to identify app-level types without flooding the response.",
+    ),
 });
 
 export type AnalyzeMemgraphInput = z.infer<typeof analyzeMemgraphSchema>;
@@ -30,8 +49,10 @@ export interface CycleSummary {
   instanceSize?: number;
   /** Number of descendant nodes in the retain chain. */
   chainLength: number;
-  /** Class names appearing anywhere in the chain (deduped). */
+  /** Top-ranked class names appearing in the chain (capped, app-level priority). */
   classesInChain: string[];
+  /** Total unique class names found in the chain (the cap-aware count for context). */
+  classesInChainTotal: number;
 }
 
 export interface AnalyzeMemgraphResult {
@@ -62,10 +83,14 @@ export function summarizeLeaks(
   leaksText: string,
   path: string,
   fullChains = false,
+  verbosity: Verbosity = "compact",
+  maxClassesInChain = 10,
 ): AnalyzeMemgraphResult {
   const report = parseLeaksOutput(leaksText);
   const roots = rootCyclesOnly(report.cycles);
-  const cycles: CycleSummary[] = roots.map((c) => summarizeCycle(c));
+  const cycles: CycleSummary[] = roots.map((c) =>
+    summarizeCycle(c, verbosity, maxClassesInChain),
+  );
 
   const diagnosis = buildDiagnosis(report, cycles);
 
@@ -87,23 +112,44 @@ export function summarizeLeaks(
   };
 }
 
-function summarizeCycle(node: CycleNode): CycleSummary {
-  const classes = new Set<string>();
+function summarizeCycle(
+  node: CycleNode,
+  verbosity: Verbosity,
+  maxClassesInChain: number,
+): CycleSummary {
+  const classCounts = new Map<string, number>();
   let chainLength = 0;
   const visit = (n: CycleNode) => {
     chainLength += 1;
-    if (n.className) classes.add(n.className);
+    if (n.className) {
+      const short = shortenForVerbosity(n.className, verbosity);
+      classCounts.set(short, (classCounts.get(short) ?? 0) + 1);
+    }
     for (const child of n.children) visit(child);
   };
   visit(node);
+  // Rank classes by occurrence count, take top N. App-level classes (those
+  // that don't start with a stdlib prefix even in compact form) get
+  // priority since they're the ones the user actually wrote.
+  const ranked = Array.from(classCounts.entries())
+    .sort((a, b) => {
+      const aIsApp = !/^(_DictionaryStorage|Closure|ForEach|Modified|AsyncImage|StoredLocation|LocationBox|TagIndex|AnyHashable|WeakBox|AnyLocation)/.test(a[0]);
+      const bIsApp = !/^(_DictionaryStorage|Closure|ForEach|Modified|AsyncImage|StoredLocation|LocationBox|TagIndex|AnyHashable|WeakBox|AnyLocation)/.test(b[0]);
+      if (aIsApp !== bIsApp) return aIsApp ? -1 : 1;
+      return b[1] - a[1];
+    })
+    .slice(0, maxClassesInChain)
+    .map(([name]) => name);
+
   return {
-    className: node.className,
+    className: shortenForVerbosity(node.className, verbosity),
     address: node.address,
     count: node.count,
     size: node.size,
     instanceSize: node.instanceSize,
     chainLength,
-    classesInChain: Array.from(classes),
+    classesInChain: ranked,
+    classesInChainTotal: classCounts.size,
   };
 }
 
@@ -147,5 +193,11 @@ export async function analyzeMemgraph(
     );
   }
 
-  return summarizeLeaks(result.stdout, path, input.fullChains ?? false);
+  return summarizeLeaks(
+    result.stdout,
+    path,
+    input.fullChains ?? false,
+    input.verbosity ?? "compact",
+    input.maxClassesInChain ?? 10,
+  );
 }

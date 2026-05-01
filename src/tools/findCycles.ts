@@ -7,6 +7,10 @@ import {
   rootCyclesOnly,
   walkCycles,
 } from "../parsers/leaksOutput.js";
+import {
+  shortenForVerbosity,
+  type Verbosity,
+} from "../parsers/shortenClassName.js";
 import type { CycleNode } from "../types.js";
 
 export const findCyclesSchema = z.object({
@@ -23,6 +27,12 @@ export const findCyclesSchema = z.object({
     .positive()
     .default(10)
     .describe("Truncate chains beyond this depth (default 10)."),
+  verbosity: z
+    .enum(["compact", "normal", "full"])
+    .default("compact")
+    .describe(
+      "Class-name verbosity. `compact` shortens SwiftUI generic names aggressively; `full` returns demangled names verbatim.",
+    ),
 });
 
 export type FindCyclesInput = z.infer<typeof findCyclesSchema>;
@@ -60,6 +70,7 @@ export interface FindCyclesResult {
 function flattenChain(
   node: CycleNode,
   maxDepth: number,
+  verbosity: Verbosity,
 ): CycleChainEntry[] {
   const out: CycleChainEntry[] = [];
   for (const { node: n, depth } of walkCycles([node])) {
@@ -68,7 +79,7 @@ function flattenChain(
       depth,
       edge: n.edge,
       retainKind: n.retainKind,
-      className: n.className,
+      className: shortenForVerbosity(n.className, verbosity),
       address: n.address,
       count: n.count,
       size: n.size,
@@ -85,17 +96,18 @@ export function extractCycles(
   path: string,
   filter?: string,
   maxDepth = 10,
+  verbosity: Verbosity = "compact",
 ): FindCyclesResult {
   const report = parseLeaksOutput(leaksText);
   const roots = rootCyclesOnly(report.cycles);
 
   const cycles: CycleResult[] = roots.map((c) => {
-    const chain = flattenChain(c, maxDepth);
+    const chain = flattenChain(c, maxDepth, verbosity);
     const matched = filter
       ? chain.some((entry) => entry.className.includes(filter))
       : true;
     return {
-      rootClass: c.className,
+      rootClass: shortenForVerbosity(c.className, verbosity),
       rootAddress: c.address,
       count: c.count,
       size: c.size,
@@ -135,5 +147,6 @@ export async function findCycles(
     path,
     input.className,
     input.maxDepth ?? 10,
+    input.verbosity ?? "compact",
   );
 }

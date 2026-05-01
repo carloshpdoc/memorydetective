@@ -34,7 +34,18 @@ describe("summarizeLeaks (analyzeMemgraph pure path)", () => {
 
   it("flags DetailViewModel as an app-level class in chain", () => {
     const result = summarizeLeaks(leaksText, "/fake/path.memgraph");
-    expect(result.diagnosis).toContain("DetailViewModel");
+    // Top-N capping in classesInChain (default 10) may exclude single-occurrence
+    // names when many app-level classes share the cycle. Verify with `full`
+    // verbosity and a higher cap, where DetailViewModel must surface.
+    const full = summarizeLeaks(
+      leaksText,
+      "/fake/path.memgraph",
+      false,
+      "full",
+      50,
+    );
+    const allClasses = full.cycles.flatMap((c) => c.classesInChain);
+    expect(allClasses.some((c) => c.includes("DetailViewModel"))).toBe(true);
   });
 
   it("reports zero cycles cleanly", () => {

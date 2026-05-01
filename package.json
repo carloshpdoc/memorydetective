@@ -1,6 +1,6 @@
 {
   "name": "memorydetective",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "MCP server for iOS leak hunting and performance investigation. Reads .memgraph + .trace files, captures new ones via xctrace and leaks(1), classifies retain cycles.",
   "type": "module",
   "bin": {
@@ -11,6 +11,7 @@
     "dist",
     "README.md",
     "LICENSE",
+    "NOTICE",
     "CHANGELOG.md",
     "USAGE.md"
   ],
@@ -35,7 +36,7 @@
     "performance"
   ],
   "author": "Carlos Henrique",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/carloshpdoc/memorydetective#readme",
   "repository": {
     "type": "git",

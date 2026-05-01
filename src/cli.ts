@@ -11,8 +11,9 @@
  *   memorydetective --version
  */
 
-import { existsSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve as resolvePath, join as joinPath } from "node:path";
 import { analyzeMemgraph } from "./tools/analyzeMemgraph.js";
 import { classifyCycle } from "./tools/classifyCycle.js";
 
@@ -27,7 +28,7 @@ const C = {
   gray: "\x1b[90m",
 };
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 
 const HELP = `${C.bold}memorydetective${C.reset} — iOS leak hunting from the CLI
 
@@ -43,8 +44,45 @@ ${C.dim}Flags:${C.reset}
 
 ${C.dim}When called with no arguments, memorydetective starts as an MCP server${C.reset}
 ${C.dim}over stdio. See https://github.com/carloshpdoc/memorydetective#configure${C.reset}
-${C.dim}for full Claude Code / Desktop / Cursor / Cline configuration.${C.reset}
+${C.dim}for full Claude Code / Desktop / Cursor / Cline / Kiro configuration.${C.reset}
+
+${C.dim}⭐ Star: ${C.reset}https://github.com/carloshpdoc/memorydetective
 `;
+
+const FIRST_RUN_BANNER = `
+${C.bold}👋 First time using memorydetective?${C.reset}
+
+   ${C.green}⭐ Star:${C.reset}    https://github.com/carloshpdoc/memorydetective
+   ${C.cyan}📖 Guide:${C.reset}   https://github.com/carloshpdoc/memorydetective/blob/main/USAGE.md
+   ${C.yellow}☕ Sponsor:${C.reset} https://buymeacoffee.com/carloshperc
+
+${C.dim}This message shows once.${C.reset}
+`;
+
+const FIRST_RUN_MARKER = joinPath(
+  homedir(),
+  ".config",
+  "memorydetective",
+  "seen",
+);
+
+/** Show the first-time banner once per machine, then create a marker so it
+ *  never shows again. Failures (e.g. read-only home) are silent — banner
+ *  hygiene shouldn't break the user's actual work. */
+function maybeShowFirstRunBanner(): void {
+  try {
+    if (existsSync(FIRST_RUN_MARKER)) return;
+    process.stderr.write(FIRST_RUN_BANNER + "\n");
+    mkdirSync(joinPath(homedir(), ".config", "memorydetective"), {
+      recursive: true,
+    });
+    writeFileSync(FIRST_RUN_MARKER, new Date().toISOString());
+  } catch {
+    // ignore — never fail because of the banner
+  }
+}
+
+const DIAGNOSIS_FOOTER = `${C.dim}# Found this useful? ⭐ https://github.com/carloshpdoc/memorydetective${C.reset}`;
 
 const KNOWN_COMMANDS = ["analyze", "classify", "--help", "-h", "help", "--version", "-v"];
 
@@ -152,7 +190,12 @@ function suggestCommand(input: string): string | null {
 
 async function runAnalyze(memgraphPath: string, asJson: boolean): Promise<number> {
   validateMemgraphPath(memgraphPath);
-  const result = await analyzeMemgraph({ path: memgraphPath, fullChains: false });
+  const result = await analyzeMemgraph({
+    path: memgraphPath,
+    fullChains: false,
+    verbosity: "compact",
+    maxClassesInChain: 10,
+  });
 
   if (asJson) {
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -190,6 +233,7 @@ async function runAnalyze(memgraphPath: string, asJson: boolean): Promise<number
 
   console.log(`\n  ${C.bold}Diagnosis:${C.reset}`);
   console.log(`    ${C.green}${result.diagnosis}${C.reset}\n`);
+  console.log(DIAGNOSIS_FOOTER + "\n");
   return 0;
 }
 
@@ -235,10 +279,17 @@ async function runClassify(memgraphPath: string, asJson: boolean): Promise<numbe
     }
   }
   console.log("");
+  console.log(DIAGNOSIS_FOOTER + "\n");
   return 0;
 }
 
 export async function runCli(args: string[]): Promise<number> {
+  // Fire the first-run banner before dispatching anything heavy. JSON-mode
+  // callers shouldn't see it (might mess with their pipes), so we only show
+  // it for human-output commands.
+  const isJsonRun = args.includes("--json");
+  if (!isJsonRun) maybeShowFirstRunBanner();
+
   const [cmd, ...rest] = args;
   try {
     switch (cmd) {

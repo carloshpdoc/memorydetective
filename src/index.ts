@@ -66,6 +66,10 @@ import {
   detectLeaksInXCUITest,
   detectLeaksInXCUITestSchema,
 } from "./tools/detectLeaksInXCUITest.js";
+import {
+  reachableFromCycle,
+  reachableFromCycleSchema,
+} from "./tools/reachableFromCycle.js";
 
 const SERVER_NAME = "memorydetective";
 const SERVER_VERSION = "0.1.0-dev";
@@ -372,6 +376,22 @@ server.registerTool(
   async (input) => {
     const result = await detectLeaksInXCUITest(input);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "reachableFromCycle",
+  {
+    title: "Count instances reachable from a specific cycle root",
+    description:
+      "Cycle-scoped reachability + class counting. Answers questions like \"how many `NSURLSessionConfiguration` instances are reachable from the cycle rooted at `DetailViewModel`?\" — distinguishing the actual culprit (the cycle root) from its retained dependencies. Pick a cycle by zero-based `cycleIndex` or by `rootClassName` substring. Returns per-class counts ranked by occurrence, plus the total reachable node count.",
+    inputSchema: reachableFromCycleSchema.shape,
+  },
+  async (input) => {
+    const result = await reachableFromCycle(input);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
   },
 );
 
