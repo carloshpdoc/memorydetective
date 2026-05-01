@@ -211,7 +211,9 @@ Copilot's MCP integration moves fast — if this snippet is stale, see the [VS C
 
 ## API
 
-25 MCP tools, grouped by purpose.
+26 MCP tools, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[meta]`) so related tools are visible at a glance.
+
+Many tools include a `suggestedNextCalls` field in their response — a typed list of `{ tool, args, why }` entries pre-populated from the current result, so the orchestrating LLM can chain calls without re-reasoning. Start with `getInvestigationPlaybook(kind)` for the canonical sequence.
 
 ### Read & analyze (13)
 

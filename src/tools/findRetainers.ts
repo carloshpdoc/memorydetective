@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { runLeaksAndParse } from "../runtime/leaks.js";
-import type { CycleNode, LeaksReport } from "../types.js";
+import { suggestionGetDefinition } from "../runtime/suggestions.js";
+import type { CycleNode, LeaksReport, NextCallSuggestion } from "../types.js";
 
 export const findRetainersSchema = z.object({
   path: z.string().min(1).describe("Absolute path to a `.memgraph` file."),
@@ -41,6 +42,8 @@ export interface FindRetainersResult {
   className: string;
   totalMatches: number;
   retainers: RetainerChain[];
+  /** Pipeline hint — once you know who retains the class, locate it in source. */
+  suggestedNextCalls?: NextCallSuggestion[];
 }
 
 /**
@@ -91,11 +94,18 @@ export async function findRetainers(
     input.className,
     input.maxResults ?? 10,
   );
+
+  const suggestedNextCalls: NextCallSuggestion[] =
+    totalMatches > 0
+      ? [suggestionGetDefinition({ symbolName: input.className })]
+      : [];
+
   return {
     ok: true,
     path: resolvedPath,
     className: input.className,
     totalMatches,
     retainers,
+    ...(suggestedNextCalls.length > 0 ? { suggestedNextCalls } : {}),
   };
 }

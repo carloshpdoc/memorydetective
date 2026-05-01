@@ -7,7 +7,11 @@ import {
   shortenForVerbosity,
   type Verbosity,
 } from "../parsers/shortenClassName.js";
-import type { CycleNode, LeaksReport } from "../types.js";
+import {
+  suggestionClassifyCycle,
+  suggestionReachableFromCycle,
+} from "../runtime/suggestions.js";
+import type { CycleNode, LeaksReport, NextCallSuggestion } from "../types.js";
 
 export const analyzeMemgraphSchema = z.object({
   path: z
@@ -73,6 +77,8 @@ export interface AnalyzeMemgraphResult {
   fullReport?: LeaksReport;
   /** Plain-English diagnosis (one liner). */
   diagnosis: string;
+  /** Pipeline hints — chain `classifyCycle` next, then `reachableFromCycle` to scope blame. */
+  suggestedNextCalls?: NextCallSuggestion[];
 }
 
 /**
@@ -94,6 +100,14 @@ export function summarizeLeaks(
 
   const diagnosis = buildDiagnosis(report, cycles);
 
+  const suggestedNextCalls: NextCallSuggestion[] =
+    cycles.length > 0
+      ? [
+          suggestionClassifyCycle({ path }),
+          suggestionReachableFromCycle({ path, cycleIndex: 0 }),
+        ]
+      : [];
+
   return {
     ok: true,
     path,
@@ -109,6 +123,7 @@ export function summarizeLeaks(
     cycles,
     ...(fullChains ? { fullReport: report } : {}),
     diagnosis,
+    ...(suggestedNextCalls.length > 0 ? { suggestedNextCalls } : {}),
   };
 }
 

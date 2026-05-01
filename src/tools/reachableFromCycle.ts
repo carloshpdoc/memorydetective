@@ -5,7 +5,12 @@ import {
   shortenForVerbosity,
   type Verbosity,
 } from "../parsers/shortenClassName.js";
-import type { CycleNode, LeaksReport } from "../types.js";
+import {
+  pickPrimaryAppClass,
+  suggestionFindReferences,
+  suggestionGetDefinition,
+} from "../runtime/suggestions.js";
+import type { CycleNode, LeaksReport, NextCallSuggestion } from "../types.js";
 
 /**
  * Cycle-scoped reachability + class counting.
@@ -80,6 +85,8 @@ export interface ReachableFromCycleResult {
   counts: ClassCount[];
   /** Total unique classes in the cycle's reachable set. */
   uniqueClasses: number;
+  /** Pipeline hint — locate the cycle root in source code. */
+  suggestedNextCalls?: NextCallSuggestion[];
 }
 
 /** Pure: walk the tree from root, count nodes by className. */
@@ -150,17 +157,31 @@ export function reachableFromReport(
   entries.sort((a, b) => b.count - a.count);
   entries = entries.slice(0, input.topN ?? 20);
 
+  // Find a class that looks "app-level" (not stdlib / SwiftUI internal) to
+  // suggest as the followup target. The cycle root is the canonical answer
+  // when it itself is app-level; otherwise we walk the counts.
+  const suggestedNextCalls: NextCallSuggestion[] = [];
+  const rootShort = shortenForVerbosity(picked.node.className, verbosity);
+  const candidate =
+    pickPrimaryAppClass([rootShort]) ??
+    pickPrimaryAppClass(entries.map((e) => e.className));
+  if (candidate) {
+    suggestedNextCalls.push(suggestionGetDefinition({ symbolName: candidate }));
+    suggestedNextCalls.push(suggestionFindReferences({ symbolName: candidate }));
+  }
+
   return {
     ok: true,
     path,
     cycle: {
       index: picked.index,
-      rootClass: shortenForVerbosity(picked.node.className, verbosity),
+      rootClass: rootShort,
       rootAddress: picked.node.address,
       totalReachable: total,
     },
     counts: entries,
     uniqueClasses: byClass.size,
+    ...(suggestedNextCalls.length > 0 ? { suggestedNextCalls } : {}),
   };
 }
 

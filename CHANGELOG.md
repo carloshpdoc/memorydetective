@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-05-01
+
+Pipeline-aware release. Addresses real-user feedback that the Swift tools were "an attachment" rather than part of the investigation chain. **Discovery is now data, not inference.** 25 → 26 tools.
+
+### Added
+
+- **`suggestedNextCalls` field** on `analyzeMemgraph`, `classifyCycle`, `findRetainers`, and `reachableFromCycle` results. Each entry is a typed `{ tool, args, why }` triple with pre-populated arguments based on the current result. The orchestrating LLM can chain calls without re-reasoning over the response.
+  - `analyzeMemgraph` → suggests `classifyCycle` + `reachableFromCycle`.
+  - `classifyCycle` → suggests `swiftSearchPattern` (with a regex pre-translated from the matched pattern) + `swiftGetSymbolDefinition` (with the cycle's app-level class name extracted).
+  - `findRetainers` → suggests `swiftGetSymbolDefinition` for the class.
+  - `reachableFromCycle` → suggests `swiftGetSymbolDefinition` + `swiftFindSymbolReferences` for the dominant app-level class.
+- **`getInvestigationPlaybook` meta-tool** — returns a versioned, declarative pipeline for a known investigation kind. Five playbooks shipped: `memgraph-leak`, `perf-hangs`, `ui-jank`, `app-launch-slow`, `verify-fix`. Use this once at the start of an investigation to give a fresh agent the canonical sequence without rediscovering it.
+- **Tool-name namespaces in descriptions**: every tool description now opens with a category tag (`[mg.memory]`, `[mg.trace]`, `[mg.code]`, `[mg.log]`, `[mg.discover]`, `[mg.render]`, `[mg.ci]`, `[meta]`). Makes related tools visible as a group at a glance, especially when the agent is browsing the deferred-tools list.
+- **Pipeline lines in key tool descriptions** (`analyzeMemgraph` and `classifyCycle`): each description ends with a "Pipeline: → X (purpose) → Y (purpose)" sentence. Even when the agent only reads the description (not the result), the chain is visible.
+- New `src/runtime/suggestions.ts` helper module so multiple tools agree on the same heuristics for "which class is most actionable" and "which followup is most useful".
+
+### Changed
+
+- No breaking changes. All `suggestedNextCalls` fields are optional; old callers that ignore them continue to work.
+- `classifyReport` (pure function) now also returns `classNamesByIndex` so the caller can build typed suggestions without re-walking the cycle forest.
+
+### Notes
+
+- Inspired by the HATEOAS pattern (Hypermedia as the Engine of Application State) — each response telegraphs the next valid actions. Keeps tool boundaries clean while making the workflow self-documenting.
+
 ## [1.2.1] — 2026-05-01
 
 ### Added
@@ -135,7 +160,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.0.1...v1.1.0

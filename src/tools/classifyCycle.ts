@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { runLeaksAndParse } from "../runtime/leaks.js";
 import { rootCyclesOnly, walkCycles } from "../parsers/leaksOutput.js";
-import type { CycleNode, LeaksReport } from "../types.js";
+import {
+  pickPrimaryAppClass,
+  suggestionsForClassification,
+} from "../runtime/suggestions.js";
+import type { CycleNode, LeaksReport, NextCallSuggestion } from "../types.js";
 
 export const classifyCycleSchema = z.object({
   path: z.string().min(1).describe("Absolute path to a `.memgraph` file."),
@@ -44,6 +48,12 @@ export interface ClassifyCycleResult {
   path: string;
   totalCycles: number;
   classified: CycleClassification[];
+  /**
+   * Suggested next tool calls based on the highest-confidence pattern hit.
+   * Each entry has pre-populated args and a one-sentence rationale —
+   * the orchestrator can chain them without re-reasoning over the result.
+   */
+  suggestedNextCalls?: NextCallSuggestion[];
 }
 
 interface PatternDefinition {
@@ -169,8 +179,13 @@ export const PATTERNS: PatternDefinition[] = [
 export function classifyReport(
   report: LeaksReport,
   maxResults = 20,
-): { totalCycles: number; classified: CycleClassification[] } {
+): {
+  totalCycles: number;
+  classified: CycleClassification[];
+  classNamesByIndex: string[][];
+} {
   const roots = rootCyclesOnly(report.cycles);
+  const classNamesByIndex: string[][] = [];
   const classified: CycleClassification[] = roots
     .slice(0, maxResults)
     .map((root) => {
@@ -178,6 +193,7 @@ export function classifyReport(
       for (const { node } of walkCycles([root])) {
         if (node.className) allClasses.add(node.className);
       }
+      classNamesByIndex.push(Array.from(allClasses));
       const matches: PatternMatch[] = [];
       for (const p of PATTERNS) {
         const conf = p.match(root, allClasses);
@@ -201,16 +217,41 @@ export function classifyReport(
         allMatches: matches,
       };
     });
-  return { totalCycles: roots.length, classified };
+  return { totalCycles: roots.length, classified, classNamesByIndex };
 }
 
 export async function classifyCycle(
   input: ClassifyCycleInput,
 ): Promise<ClassifyCycleResult> {
   const { report, resolvedPath } = await runLeaksAndParse(input.path);
-  const { totalCycles, classified } = classifyReport(
+  const { totalCycles, classified, classNamesByIndex } = classifyReport(
     report,
     input.maxResults ?? 20,
   );
-  return { ok: true, path: resolvedPath, totalCycles, classified };
+
+  // Build suggestedNextCalls based on the highest-confidence match across
+  // all cycles. Picks the first cycle with a primary match (cycles are
+  // emitted in descending leak-count order, so this is the dominant one).
+  const suggestedNextCalls: NextCallSuggestion[] = [];
+  for (let i = 0; i < classified.length; i++) {
+    const c = classified[i];
+    if (!c.primaryMatch) continue;
+    const appLevel = pickPrimaryAppClass(classNamesByIndex[i] ?? []);
+    suggestedNextCalls.push(
+      ...suggestionsForClassification({
+        patternId: c.primaryMatch.patternId,
+        rootClass: c.rootClass,
+        appLevelClass: appLevel,
+      }),
+    );
+    break; // one cycle's worth is enough
+  }
+
+  return {
+    ok: true,
+    path: resolvedPath,
+    totalCycles,
+    classified,
+    ...(suggestedNextCalls.length > 0 ? { suggestedNextCalls } : {}),
+  };
 }

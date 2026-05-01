@@ -57,3 +57,18 @@ export interface LeaksReport {
   /** True if the report contains zero ROOT CYCLE entries (independent of leakCount, since plain leaks may exist). */
   hasNoCycles: boolean;
 }
+
+/**
+ * HATEOAS-style hint that an LLM agent can chain after the current tool's
+ * result. We pre-populate `args` from the current response so the agent can
+ * call the next tool with one fewer inference step. The agent is free to
+ * adapt or ignore — these are suggestions, not commands.
+ */
+export interface NextCallSuggestion {
+  /** Name of the tool to call next. */
+  tool: string;
+  /** Pre-populated arguments based on the current result. */
+  args: Record<string, unknown>;
+  /** One-sentence rationale: why this next call advances the investigation. */
+  why: string;
+}
