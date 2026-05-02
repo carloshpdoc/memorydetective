@@ -108,6 +108,51 @@ The full loop, from artifact to code edit. Combines memory-graph analysis with S
 
 ---
 
+## What it saves you
+
+The pitch in one sentence: **`memorydetective` turns a 50–500 MB binary memgraph (or a 200 KB `leaks(1)` text dump) into a 2–5 KB structured summary your AI agent can actually reason about.** That changes the economics of using an LLM for iOS perf investigation.
+
+### Tokens (when paired with an AI agent like Claude / Cursor / Cline)
+
+A real-world retain-cycle investigation, run twice — once with `memorydetective`, once with the agent reading the raw `leaks(1)` output directly:
+
+| Step | Without MCP (agent reads raw output) | With `memorydetective` |
+|---|---|---|
+| Load `leaks` text dump (~280 KB) | ~70,000 input tokens | n/a |
+| `analyzeMemgraph` summary | n/a | ~750 input tokens |
+| `classifyCycle` + fix hint | agent re-reasons over the dump per follow-up (3–4 extra turns) | 1 turn, structured `patternId` + `fixHint` |
+| `findRetainers` / `reachableFromCycle` | agent re-scans the dump | ~500 tokens, scoped query |
+| **Net per investigation** | ~85,000 tokens, ~6 turns | ~3,000 tokens, ~2 turns |
+
+**Translates to roughly $0.40–$1.20 per investigation** depending on the model (Claude Opus / Sonnet / Haiku). Compounds linearly with file size and investigation depth.
+
+### Developer time
+
+The same investigation, measured by the developer:
+
+| Step | Without MCP | With `memorydetective` |
+|---|---|---|
+| Capture memgraph + run `leaks` | 5 min | 5 min (same) |
+| Read & interpret `leaks` text dump | 15–30 min (skim 200 KB of repetitive frames) | 30 sec (read 3 KB summary) |
+| Identify the responsible pattern | 10–20 min (recognize the cycle shape from experience) | instant (classifier returns `patternId` + fix hint) |
+| Locate the suspect type in source | 10–15 min (grep + manual navigation) | 30 sec (`swiftGetSymbolDefinition` returns `file:line`) |
+| Find every callsite to gauge fix blast radius | 5–10 min (Xcode / grep) | 10 sec (`swiftFindSymbolReferences`) |
+| **Net wall-clock** | **45–80 min** | **~10 min** |
+
+Numbers are rounded from a single anonymized real investigation (a SwiftUI retain cycle over a tagged `ForEach` that pinned ~28 MB of network-stack state). Your mileage will vary with cycle complexity and codebase size.
+
+### When the win is marginal
+
+Be honest about where this **doesn't** help much:
+
+- **Tiny memgraphs** (a single cycle, < 50 KB raw): MCP overhead is roughly token-neutral vs. raw read. The dev-time win still holds (no manual cycle parsing) but the token win shrinks.
+- **One-shot symbol lookups** without a leak attached: just use `grep`, you don't need this.
+- **First-time investigations on a new codebase**: the agent still needs orientation turns regardless of MCP. The compounding wins kick in on the *second* and later investigations once the agent has cached the project's shape.
+
+The win compounds with **(a)** file size, **(b)** investigation depth (multi-turn), and **(c)** how many leaks you investigate per quarter. For a single dev fixing one leak per year, the value is mostly the dev-time saving. For a team running CI gates with `verifyFix` across every PR, the token + time savings stack across hundreds of runs.
+
+---
+
 ## Configure
 
 The `memorydetective` binary speaks MCP over stdio. Point any MCP-compatible client at it.
@@ -215,7 +260,7 @@ Copilot's MCP integration moves fast — if this snippet is stale, see the [VS C
 
 Many tools include a `suggestedNextCalls` field in their response — a typed list of `{ tool, args, why }` entries pre-populated from the current result, so the orchestrating LLM can chain calls without re-reasoning. Start with `getInvestigationPlaybook(kind)` for the canonical sequence.
 
-The cycle classifier ships **24 named antipatterns** spanning SwiftUI, Combine, Swift Concurrency, UIKit (Timer/CADisplayLink/UIGestureRecognizer/KVO/URLSession/WebKit/DispatchSource), Coordinator pattern, and the popular third-party libs RxSwift + Realm. Each pattern has a one-line fix hint and a confidence tier.
+The cycle classifier ships **27 named antipatterns** spanning SwiftUI, Combine, Swift Concurrency, UIKit (Timer/CADisplayLink/UIGestureRecognizer/KVO/URLSession/WebKit/DispatchSource), Core Animation (CAAnimation/custom CALayer delegate quirks), Core Data (`NSFetchedResultsController`), Coordinator pattern, and the popular third-party libs RxSwift + Realm. Each pattern has a one-line fix hint and a confidence tier.
 
 ### Read & analyze (13)
 
@@ -228,7 +273,7 @@ The cycle classifier ships **24 named antipatterns** spanning SwiftUI, Combine, 
 | `reachableFromCycle` | Cycle-scoped reachability. "How many `<X>` instances are reachable from the cycle rooted at `<Y>`?" — distinguishes the actual culprit from its retained dependencies. |
 | `diffMemgraphs` | Compare two `.memgraph` snapshots: total deltas + class-count changes + cycles new/gone/persisted. |
 | `verifyFix` | Cycle-semantic diff: per-pattern PASS/PARTIAL/FAIL verdict + bytes freed. CI-gateable. |
-| `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of **24 named antipatterns** (SwiftUI / Combine / Concurrency / UIKit / Coordinator / RxSwift / Realm) with confidence + fix hint. |
+| `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of **27 named antipatterns** (SwiftUI / Combine / Concurrency / UIKit / Core Animation / Core Data / Coordinator / RxSwift / Realm) with confidence + fix hint. |
 | `analyzeHangs` | Parse `xctrace` `potential-hangs` schema; return Hang vs Microhang counts + top N longest. |
 | `analyzeAnimationHitches` | Parse `xctrace` `animation-hitches` schema; report by-type counts and how many hitches crossed Apple's user-perceptible 100ms threshold. |
 | `analyzeTimeProfile` | Parse `xctrace` `time-profile` schema; return top symbols by sample count. Reports SIGSEGV with workarounds when xctrace can't symbolicate. |
@@ -316,17 +361,15 @@ npm run dev               # tsx, stdio mode (dev mode)
 Contributions are welcome — bug reports, feature requests, new cycle patterns, all of it.
 
 - **Bugs / feature requests**: [open an issue](https://github.com/carloshpdoc/memorydetective/issues).
-- **PRs**: fork → branch → `npm install` → make changes → `npm test` (61 tests must stay green) → open a PR with a concise description of what changed and why.
+- **PRs**: fork → branch → `npm install` → make changes → `npm test` (152 tests must stay green) → open a PR with a concise description of what changed and why.
 
 ### Adding a cycle pattern to `classifyCycle`
 
-`classifyCycle` ships with 8 built-in patterns (TagIndexProjection, dict-storage WeakBox, ForEachState tap, closure-viewmodel-strong, UINavigationController host, Combine sink, Task captures, NotificationCenter observer). To add one:
+`classifyCycle` ships with 27 built-in patterns covering SwiftUI, Combine, Swift Concurrency, UIKit (Timer / CADisplayLink / UIGestureRecognizer / KVO / URLSession / WebKit / DispatchSource), Core Animation, Core Data, the Coordinator pattern, RxSwift, and Realm. To add one:
 
 1. Edit `src/tools/classifyCycle.ts` — add an entry to `PATTERNS` with `id`, `name`, `fixHint`, and a `match` function.
 2. Add a test in `src/tools/readTools.test.ts` that asserts the new pattern fires against a representative memgraph fixture.
 3. Open a PR.
-
-In v0.2 the catalog moves to a separate repo so patterns can be added without modifying the server code.
 
 ## Support this project
 

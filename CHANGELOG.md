@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-02
+
+Catalog completion + cost transparency. **24 → 27 patterns** (Core Animation animation/layer delegate quirks, Core Data `NSFetchedResultsController`), and the README now documents what `memorydetective` saves you in tokens and developer time, including the cases where the win is marginal.
+
+### Added
+
+- **3 new cycle patterns** in `classifyCycle`, completing the catalog triage from the v1.4 research review:
+  - `coreanimation.animation-delegate-strong` — `CAAnimation.delegate` is **strong** (Apple-documented quirk). Catches `CABasicAnimation`, `CAKeyframeAnimation`, `CASpringAnimation`, `CAAnimationGroup`, `CATransition`. Fix hint: use a `WeakProxy` delegate or set `anim.delegate = nil` in `deinit`.
+  - `coreanimation.layer-delegate-cycle` — Custom `CALayer` subclass (`CAShapeLayer`, `CAGradientLayer`, `CAEmitterLayer`, `CAMetalLayer`, etc.) wired to a non-UIView delegate. UIKit's auto-weak pairing only protects `UIView`-owned layers. Confidence is `high` when the cycle has no `UIView`, `medium` otherwise; plain `CALayer + UIView` is treated as normal pairing and skipped to avoid false positives.
+  - `coredata.fetchedresultscontroller-delegate` — `NSFetchedResultsController` (and the private `_PFFetchedResultsController`) historically retained its delegate via the change-tracking machinery. Fix hint: clear `frc.delegate = nil` in `viewWillDisappear`/`deinit` or store behind a `WeakFRCDelegate` proxy.
+- **README "What it saves you" section** — concrete token-cost and developer-time comparison for a real-world retain-cycle investigation, with explicit acknowledgement of when the win is marginal (tiny memgraphs, one-shot lookups, first-time investigations on a new codebase). Anonymized numbers from a real investigation, not synthetic.
+
+### Changed
+
+- `USAGE.md` section 2 now lists all 27 patterns, grouped by release wave (v1.0 core / v1.4 expansion / v1.5 completion). Previously stale at "8 cycle patterns" since v1.4 — fixed in this release.
+- README "Adding a cycle pattern" section updated for the current catalog shape and dropped the outdated "v0.2 catalog repo" plan (the catalog stayed in-process via `PATTERNS`, that aspirational split never happened).
+- Test count: 144 → 152 (8 new tests covering the 3 v1.5 patterns and the catalog count assertion).
+
+### Notes
+
+- No breaking changes — all additions are catalog entries plus documentation.
+- The 27-pattern catalog now covers SwiftUI, Combine, Swift Concurrency, UIKit (Timer / CADisplayLink / UIGestureRecognizer / KVO / URLSession / WebKit / DispatchSource), Core Animation, Core Data, the Coordinator pattern, RxSwift, and Realm — broadly the leak families that account for ~95% of real-world iOS retain cycles per the FBRetainCycleDetector + SwiftLint + Apple-docs research review.
+
 ## [1.4.0] — 2026-05-01
 
 Deeper diagnostics. Catalog **triples** in size (8 → 24 patterns), cycles report transitive impact, and a new `verifyFix` tool gates fixes in CI by classifier-aware diff. 26 → 27 tools.

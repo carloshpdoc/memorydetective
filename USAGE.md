@@ -94,9 +94,11 @@ Claude orchestrates the full flow (see [section 3](#3-how-fixes-actually-flow-fr
 
 ---
 
-## 2. The 8 cycle patterns and their fix hints
+## 2. The 27 cycle patterns and their fix hints
 
-`classifyCycle` ships with a built-in catalog of common iOS retain-cycle patterns. Each pattern returns a `fixHint` — a plain-English string describing the fix direction.
+`classifyCycle` ships with a built-in catalog of 27 common iOS retain-cycle patterns. Each pattern returns a `fixHint` — a plain-English string describing the fix direction. Patterns are grouped below by the framework / source they target.
+
+### v1.0 core (8) — SwiftUI + Combine + Concurrency + Notifications
 
 | Pattern ID | When it matches | Fix hint (summary) |
 |---|---|---|
@@ -109,7 +111,36 @@ Claude orchestrates the full flow (see [section 3](#3-how-fixes-actually-flow-fr
 | `concurrency.task-without-weak-self` | `_Concurrency.Task<…>` + `Closure context` | `Task { }` body strongly captures self for the lifetime of the task. `Task { [weak self] in guard let self else { return }; … }`. |
 | `notificationcenter.observer-strong` | `NotificationCenter` / `NSNotificationCenter` + `Closure context` | Block-form `addObserver(forName:...)` keeps the block alive in the center. Use `[weak self]` in the block, or store the returned `NSObjectProtocol` and call `removeObserver(_:)` in `deinit`. |
 
-**Confidence tiers**: each pattern is checked at `high` first, then `medium`. If multiple patterns fire on the same cycle, all matches are returned — the highest-confidence one is `primaryMatch`, the rest are in `allMatches`.
+### v1.4 expansion (16) — UIKit, Combine, Concurrency, SwiftUI, WebKit, RxSwift, Realm
+
+| Pattern ID | When it matches | Fix hint (summary) |
+|---|---|---|
+| `timer.scheduled-target-strong` | `__NSCFTimer` / `NSTimer` in chain | `Timer.scheduledTimer(target:selector:)` retains its target. Use the closure form with `[weak self]` and `invalidate()` in `deinit`. |
+| `displaylink.target-strong` | `CADisplayLink` in chain | `CADisplayLink(target:selector:)` retains its target. Wrap with a `WeakProxy` and `invalidate()` in `deinit`. |
+| `gesture.target-strong` | `UIGestureRecognizer` / `UIControl` in chain | `addTarget(_:action:)` is strong by default. Prefer `UIAction` (iOS 14+) or `removeTarget(...)` in `deinit`. |
+| `kvo.observation-not-invalidated` | `NSKeyValueObservation` in chain | `obj.observe(\.x) { ... }` retains its handler. `[weak self]` inside, `token.invalidate()` in `deinit`. |
+| `urlsession.delegate-strong` | `__NSURLSessionLocal` / `NSURLSession` in chain | `URLSession(configuration:delegate:)` retains its delegate strongly (Apple-documented). Call `invalidateAndCancel()` in `deinit`. |
+| `dispatch.source-event-handler-self` | `OS_dispatch_source` / `DispatchSource` in chain | `setEventHandler { ... }` retains the closure. Use `[weak self]` and clear with `setEventHandler {}` in `deinit`. |
+| `notificationcenter.observer-not-removed` | `NotificationCenter` + `NSObjectProtocol` | Block-form observer never deregistered. Call `removeObserver(_:)` in `deinit` or use the selector form. |
+| `delegate.strong-reference` | Class with `Delegate` suffix in chain | `var delegate: ...?` declared without `weak`. Mark `weak`, or refactor to closure-based callback. |
+| `swiftui.envobject-back-reference` | `EnvironmentObjectStorage` + UIKit interop class in chain | `@EnvironmentObject` with strong back-reference to `UIView`/`UIViewController`. Wrap UIKit refs in `weak` box. |
+| `combine.assign-to-self` | `Combine.Assign` / `Subscribers.Assign` in chain | `.assign(to: \.x, on: self)` retains self. Use `.assign(to: &$published)` or `.sink { [weak self] ... }`. |
+| `concurrency.task-mainactor-view` | `_Concurrency.Task<…>` + SwiftUI View signal | `Task { await self.foo() }` inside `View.body` retains storage. Use `.task { ... }` modifier or capture properties up front. |
+| `concurrency.asyncstream-continuation-self` | `AsyncStream` + `Closure context` in chain | Continuation retains `onTermination`/producer closures. `[weak self]` inside, `task.cancel()` in `deinit`/`onDisappear`. |
+| `webkit.scriptmessage-handler-strong` | `WKUserContentController` / `WKScriptMessageHandler` / `WKWebView` | `add(_:name:)` retains the handler. Wrap in `WeakScriptMessageHandler` proxy or call `removeScriptMessageHandler(forName:)`. |
+| `coordinator.parent-strong-back-reference` | Two `*Coordinator` nodes in cycle | Child holds parent without `weak`. `weak var parentCoordinator`, `removeAll { $0 === finishedChild }` on completion. |
+| `rxswift.disposebag-self-cycle` | `RxSwift.DisposeBag` / `RxSwift.AnonymousDisposable` in chain | Subscription retains self if `[weak self]` is omitted or unbound method ref is passed. Always use `[weak self]`. |
+| `realm.notificationtoken-retained` | `RealmSwift.NotificationToken` / `RLMNotificationToken` | `Results.observe { ... }` retains the closure. `[weak self]` inside, `token?.invalidate()` in `deinit`. |
+
+### v1.5 catalog completion (3) — Core Animation + Core Data
+
+| Pattern ID | When it matches | Fix hint (summary) |
+|---|---|---|
+| `coreanimation.animation-delegate-strong` | `CABasicAnimation` / `CAKeyframeAnimation` / `CASpringAnimation` / `CAAnimationGroup` / `CATransition` in chain | `CAAnimation.delegate` is **strong** (Apple-documented quirk). Use a `WeakProxy` delegate or `anim.delegate = nil` in `deinit`. |
+| `coreanimation.layer-delegate-cycle` | Custom `CALayer` subclass (`CAShapeLayer` / `CAGradientLayer` / `CAEmitterLayer` / `CAMetalLayer` / etc.) in chain without `UIView` auto-pairing | Custom layer wired to non-UIView delegate leaks. Wrap in `WeakLayerDelegate` or clear `layer.delegate = nil` in `deinit`. |
+| `coredata.fetchedresultscontroller-delegate` | `NSFetchedResultsController` / `_PFFetchedResultsController` in chain | Apple's historical strong-delegate quirk via the change-tracker. `frc.delegate = nil` in `viewWillDisappear` / `deinit`. |
+
+**Confidence tiers**: each pattern returns `high`, `medium`, or `low` based on how many specific signals match. If multiple patterns fire on the same cycle, all matches are returned — the highest-confidence one is `primaryMatch`, the rest are in `allMatches`.
 
 **The hints are deliberately textual, not code patches.** That's by design — see the next section.
 

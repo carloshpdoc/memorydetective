@@ -443,6 +443,82 @@ export const PATTERNS: PatternDefinition[] = [
       return null;
     },
   },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // v1.5 catalog completion — 3 patterns previously triaged from research
+  // (Core Animation animation/layer delegate quirks, Core Data FRC).
+  // ────────────────────────────────────────────────────────────────────────
+
+  {
+    id: "coreanimation.animation-delegate-strong",
+    name: "CAAnimation retains its delegate (Apple's documented quirk)",
+    fixHint:
+      "Unlike most Cocoa delegates, `CAAnimation.delegate` is **strong** — Apple documents this explicitly. When `self` is the delegate and also stores the animation (`self.layer.add(anim, forKey:)` keeps it alive), you get a cycle through the animation's internal handler. Either set the delegate to a `WeakProxy` wrapper, or assign `anim.delegate = nil` before the animation completes/in `deinit`, or use the closure-style `CAAnimationDelegate.animationDidStop` via a separate value-type proxy.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasAnim = classes.some(
+        (c) =>
+          c.includes("CABasicAnimation") ||
+          c.includes("CAKeyframeAnimation") ||
+          c.includes("CASpringAnimation") ||
+          c.includes("CAAnimationGroup") ||
+          c.includes("CAPropertyAnimation") ||
+          c.includes("CATransition") ||
+          c === "CAAnimation" ||
+          /\bCAAnimation\b/.test(c),
+      );
+      return hasAnim ? "high" : null;
+    },
+  },
+  {
+    id: "coreanimation.layer-delegate-cycle",
+    name: "Custom CALayer delegate pointing at non-UIView owner",
+    fixHint:
+      "`CALayer.delegate` is **unowned(unsafe)** in headers but in practice keeps a strong reference until the layer is removed. UIKit's auto-pairing (UIView owns its layer; the layer's delegate is the view) avoids this — but **custom `CALayer` subclasses** (`CAShapeLayer`, `CAGradientLayer`, `CAEmitterLayer`) wired to a non-UIView delegate (a controller, a renderer object) leak. Either keep delegates on `UIView` boundaries only, or wrap the non-view delegate in a `WeakLayerDelegate` proxy and clear `layer.delegate = nil` in `deinit`.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const customLayer = classes.some(
+        (c) =>
+          c.includes("CAShapeLayer") ||
+          c.includes("CAGradientLayer") ||
+          c.includes("CAEmitterLayer") ||
+          c.includes("CAReplicatorLayer") ||
+          c.includes("CATextLayer") ||
+          c.includes("CATiledLayer") ||
+          c.includes("CAMetalLayer") ||
+          c.includes("CAEAGLLayer"),
+      );
+      const plainLayer = classes.some(
+        (c) => c === "CALayer" || /\bCALayer\b/.test(c),
+      );
+      const hasUIView = classes.some(
+        (c) => c.includes("UIView") || c.includes("UIViewController"),
+      );
+      // Custom layer subclass + cycle without UIView = strong indicator (no
+      // UIKit auto-weak pairing). Plain CALayer + no UIView = medium. Any
+      // CALayer alongside UIView is normal pairing — skip.
+      if (customLayer && !hasUIView) return "high";
+      if (customLayer) return "medium";
+      if (plainLayer && !hasUIView) return "medium";
+      return null;
+    },
+  },
+  {
+    id: "coredata.fetchedresultscontroller-delegate",
+    name: "NSFetchedResultsController retains its delegate",
+    fixHint:
+      "`NSFetchedResultsController.delegate` was historically strong (Apple-documented quirk; modern bridging declares it `weak` but the underlying ObjC contract still allows strong retain via the change-tracking machinery). When a `UIViewController` owns the FRC and is also its delegate, the FRC's internal change-tracker pins the VC. Set `frc.delegate = nil` in `viewWillDisappear` / `deinit`, or store the FRC behind a `WeakFRCDelegate` proxy that clears itself on the VC's deallocation signal.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasFrc = classes.some(
+        (c) =>
+          c.includes("NSFetchedResultsController") ||
+          c.includes("_PFFetchedResultsController") ||
+          c.includes("PFFetchedResultsController"),
+      );
+      return hasFrc ? "high" : null;
+    },
+  },
 ];
 
 /** Pure: classify each ROOT CYCLE in the parsed report. */

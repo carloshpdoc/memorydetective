@@ -224,9 +224,9 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(classified[0].primaryMatch).toBeNull();
   });
 
-  it("PATTERNS array contains 24 patterns in v1.4 (8 v1.0 + 16 expansion)", () => {
+  it("PATTERNS array contains 27 patterns in v1.5 (8 v1.0 + 16 v1.4 + 3 v1.5)", () => {
     const ids = PATTERNS.map((p) => p.id);
-    expect(ids.length).toBe(24);
+    expect(ids.length).toBe(27);
     // Spot-check key v1.0 patterns are still there.
     expect(ids).toContain("swiftui.tag-index-projection");
     expect(ids).toContain("combine.sink-store-self-capture");
@@ -235,6 +235,10 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(ids).toContain("urlsession.delegate-strong");
     expect(ids).toContain("kvo.observation-not-invalidated");
     expect(ids).toContain("coordinator.parent-strong-back-reference");
+    // Spot-check v1.5 additions.
+    expect(ids).toContain("coreanimation.animation-delegate-strong");
+    expect(ids).toContain("coreanimation.layer-delegate-cycle");
+    expect(ids).toContain("coredata.fetchedresultscontroller-delegate");
   });
 });
 
@@ -362,5 +366,83 @@ describe("classifyCycle — v1.4 catalog expansion", () => {
       "coordinator.parent-strong-back-reference",
     );
     expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+});
+
+describe("classifyCycle — v1.5 catalog completion", () => {
+  it("matches `coreanimation.animation-delegate-strong` for CABasicAnimation", () => {
+    const r = makeReport("FadeController", [
+      "CABasicAnimation",
+      "Closure context",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "coreanimation.animation-delegate-strong",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("matches `coreanimation.animation-delegate-strong` for CAKeyframeAnimation", () => {
+    const r = makeReport("AnimRunner", ["CAKeyframeAnimation", "AnimRunner"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "coreanimation.animation-delegate-strong",
+    );
+  });
+
+  it("matches `coreanimation.layer-delegate-cycle` for CAShapeLayer with no UIView in chain", () => {
+    const r = makeReport("ChartRenderer", ["CAShapeLayer", "ChartRenderer"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "coreanimation.layer-delegate-cycle",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("downgrades `coreanimation.layer-delegate-cycle` to medium when UIView is in the cycle", () => {
+    const r = makeReport("MyView", ["CAShapeLayer", "UIView"]);
+    const { classified } = classifyReport(r);
+    const match = classified[0].allMatches.find(
+      (m) => m.patternId === "coreanimation.layer-delegate-cycle",
+    );
+    expect(match?.confidence).toBe("medium");
+  });
+
+  it("matches `coreanimation.layer-delegate-cycle` at medium for plain CALayer without UIView", () => {
+    const r = makeReport("Renderer", ["CALayer", "Renderer"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "coreanimation.layer-delegate-cycle",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("medium");
+  });
+
+  it("does NOT match `coreanimation.layer-delegate-cycle` for plain CALayer + UIView (auto-pairing is normal)", () => {
+    const r = makeReport("MyView", ["CALayer", "UIView"]);
+    const { classified } = classifyReport(r);
+    const match = classified[0].allMatches.find(
+      (m) => m.patternId === "coreanimation.layer-delegate-cycle",
+    );
+    expect(match).toBeUndefined();
+  });
+
+  it("matches `coredata.fetchedresultscontroller-delegate` for NSFetchedResultsController", () => {
+    const r = makeReport("ListVC", [
+      "NSFetchedResultsController",
+      "Closure context",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "coredata.fetchedresultscontroller-delegate",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("matches `coredata.fetchedresultscontroller-delegate` for the private _PFFetchedResultsController class name too", () => {
+    const r = makeReport("ListVC", ["_PFFetchedResultsController"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "coredata.fetchedresultscontroller-delegate",
+    );
   });
 });
