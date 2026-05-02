@@ -15,7 +15,9 @@
 
 - **CLI-driven leak hunting.** Read `.memgraph` files captured by Xcode (or by `memorydetective` itself on simulators), find ROOT CYCLEs, classify them against known SwiftUI/Combine patterns, and get a one-liner fix hint — all from a script or a chat.
 - **MCP-native.** Plugs into Claude Code, Claude Desktop, Cursor, Cline, and any other MCP client. The agent drives the full investigate → classify → suggest-fix loop without you opening Instruments.
-- **Honest about its limits.** No mocked outputs, no over-promises. Hangs analysis works clean from `xctrace`; sample-level Time Profile still needs Instruments today (planned for v0.2). Memory Graph capture works on Mac apps and iOS simulator; physical iOS devices still need Xcode.
+- **Honest about its limits.** No mocked outputs, no over-promises. Hangs analysis works clean from `xctrace`; sample-level Time Profile is parsed when `xctrace` symbolicates the trace and returns a structured workaround notice when it can't (the underlying `xctrace` SIGSEGV on heavy unsymbolicated traces is an Apple-side limitation we surface explicitly). Memory Graph capture works on Mac apps and iOS simulator; physical iOS devices still need Xcode.
+
+> **What's new in v1.5** (2026-05-02): catalog grew from 24 to **27 cycle patterns** (Core Animation animation/layer delegate quirks + Core Data `NSFetchedResultsController`), and the new [What it saves you](#what-it-saves-you) section quantifies token + developer-time savings on a real investigation. Full notes in [CHANGELOG](./CHANGELOG.md).
 
 ## Quickstart
 
@@ -70,7 +72,7 @@ memorydetective classify  ~/Desktop/myapp.memgraph
 > **You:** Profile DemoApp on my iPhone for 90 seconds and tell me where the hangs are.
 >
 > **Claude:** *(calls `listTraceDevices` → `recordTimeProfile` → `analyzeHangs`)*
-> Recorded `~/Desktop/run.trace` (90s, attached to DemoApp on iPhone 17 Pro Max). Found **23 user-visible hangs** (>500 ms each), longest 1.16 s, average 769 ms — severe load. All on the main thread. Sample-level hotspots aren't symbolicated yet; open the trace in Instruments for that step (or wait for `analyzeTimeProfile` v0.2).
+> Recorded `~/Desktop/run.trace` (90s, attached to DemoApp on iPhone 17 Pro Max). Found **23 user-visible hangs** (>500 ms each), longest 1.16 s, average 769 ms — severe load. All on the main thread. Sample-level hotspots aren't symbolicated yet; open the trace in Instruments for that step (`analyzeTimeProfile` returns a structured workaround notice when `xctrace` can't symbolicate — see CHANGELOG known limits).
 
 ### End-to-end: leak → file → fix suggestion
 
