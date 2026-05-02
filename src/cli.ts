@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { analyzeMemgraph } from "./tools/analyzeMemgraph.js";
 import { classifyCycle } from "./tools/classifyCycle.js";
+import { VERSION } from "./version.js";
 
 const C = {
   reset: "\x1b[0m",
@@ -27,8 +28,6 @@ const C = {
   cyan: "\x1b[36m",
   gray: "\x1b[90m",
 };
-
-const VERSION = "1.4.0";
 
 const HELP = `${C.bold}memorydetective${C.reset} — iOS leak hunting from the CLI
 

@@ -88,8 +88,9 @@ import {
   swiftSearchPatternSchema,
 } from "./tools/swift/index.js";
 
+import { VERSION as SERVER_VERSION } from "./version.js";
+
 const SERVER_NAME = "memorydetective";
-const SERVER_VERSION = "0.1.0-dev";
 
 const server = new McpServer({
   name: SERVER_NAME,

@@ -1,0 +1,90 @@
+name: Release validation
+
+# Fires when a `vX.Y.Z` tag is pushed (typically by scripts/release.sh).
+# This is a sanity net: it re-runs build + tests on the exact tagged commit
+# in a clean environment, and asserts that the tag, the package.json version,
+# and the CHANGELOG entry agree. The actual `npm publish` and GitHub Release
+# creation are done by `scripts/release.sh` from the maintainer's machine —
+# this workflow only catches "the published artifact does not reproduce".
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+jobs:
+  validate-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Verify package.json version matches tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [[ "v$PKG_VERSION" != "$TAG" ]]; then
+            echo "::error::package.json version v$PKG_VERSION does not match tag $TAG"
+            exit 1
+          fi
+          echo "::notice::tag $TAG matches package.json v$PKG_VERSION"
+
+      - name: Verify CHANGELOG has matching entry
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error::no '## [$VERSION]' entry in CHANGELOG.md"
+            exit 1
+          fi
+          echo "::notice::CHANGELOG entry for $VERSION present"
+
+  smoke-macos:
+    runs-on: macos-latest
+    needs: validate-tag
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: CLI smoke (--version reports the tagged version)
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          OUT="$(node dist/index.js --version)"
+          if [[ "$OUT" != *"$VERSION"* ]]; then
+            echo "::error::CLI --version printed '$OUT', expected to contain '$VERSION'"
+            exit 1
+          fi
+          echo "::notice::CLI --version OK: $OUT"
+
+      - name: CLI smoke (--help)
+        run: node dist/index.js --help

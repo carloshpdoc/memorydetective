@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- `memorydetective --version` now reports the actually-installed version. Previously the CLI string was hardcoded (last bumped to `"1.4.0"` in v1.4.0; never bumped for `1.5.0`). The MCP server's `SERVER_VERSION` was even staler — it had been `"0.1.0-dev"` since the v1.0.0 release. Both surfaces now read from `package.json` at runtime via `src/version.ts`, so they can never drift again.
+
+### Changed
+
+- Release process is now automated: `scripts/release.sh` orchestrates preflight → build/test → tag → npm publish → GitHub Release in one command. `.github/workflows/release.yml` re-validates on every `vX.Y.Z` tag push (build, tests, version match, CLI smoke). See the maintainer-facing checklist for the full process.
+
 ## [1.5.0] — 2026-05-02
 
 Catalog completion + cost transparency. **24 → 27 patterns** (Core Animation animation/layer delegate quirks, Core Data `NSFetchedResultsController`), and the README now documents what `memorydetective` saves you in tokens and developer time, including the cases where the win is marginal.
