@@ -1,7 +1,7 @@
 {
   "name": "memorydetective",
   "version": "1.7.0",
-  "description": "MCP server for iOS leak hunting and performance investigation. Reads .memgraph + .trace files, captures new ones via xctrace and leaks(1), classifies retain cycles.",
+  "description": "MCP server for iOS leak hunting and performance investigation. 28 tools across .memgraph and .trace files, 34-pattern retain-cycle classifier with Swift fixTemplate snippets, compareTracesByPattern for CI gating on hangs/animation-hitches/app-launch regressions, SourceKit-LSP source bridging. macOS only (depends on leaks(1) and xctrace).",
   "type": "module",
   "bin": {
     "memorydetective": "dist/index.js"
