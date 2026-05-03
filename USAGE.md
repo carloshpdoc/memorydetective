@@ -94,9 +94,15 @@ Claude orchestrates the full flow (see [section 3](#3-how-fixes-actually-flow-fr
 
 ---
 
-## 2. The 33 cycle patterns and their fix hints
+## 2. The 34 cycle patterns and their fix hints
 
-`classifyCycle` ships with a built-in catalog of 33 common iOS retain-cycle patterns. Each pattern returns a `fixHint` — a plain-English string describing the fix direction — plus an optional `staticAnalysisHint` field pointing at the SwiftLint rule (or explicit gap) that complements the runtime evidence. Patterns are grouped below by the framework / source they target.
+`classifyCycle` ships with a built-in catalog of 34 common iOS retain-cycle patterns. Each pattern returns:
+
+- a textual `fixHint` (one-line plain-English direction)
+- a `staticAnalysisHint` (which SwiftLint rule complements the runtime evidence — or an explicit gap notice)
+- a `fixTemplate` (Swift before/after code snippet — new in v1.7) the agent can adapt directly
+
+Patterns are grouped below by the framework / source they target.
 
 ### v1.0 core (8) — SwiftUI + Combine + Concurrency + Notifications
 
@@ -153,6 +159,12 @@ Sourced from Apple Developer Forums (#736110, #716804, #748042), Swift Forums (#
 | `swiftui.observations-closure-strong-self` | `Observations` (the Swift 6.2 API, NOT `ObservationRegistrar`) + `Closure context` | The new non-SwiftUI `Observations { }` closure retains self like `Combine.sink`. Use `[weak self]` inside the closure. |
 | `webkit.wkscriptmessagehandler-bridge` | `WKWebView` + `WKUserContentController` + `WKScriptMessageHandler` (or `*Bridge`/`*Handler` class) all in chain | The 3-link bridge cycle: bridge → webView → contentController → bridge. Wrap the handler in `WeakScriptMessageHandler` proxy, or `removeScriptMessageHandler(forName:)` for every name added. Fires alongside the broader v1.4 `webkit.scriptmessage-handler-strong` pattern when the full bridge shape is present. |
 
+### v1.7 catalog (1) — SwiftData + Actor
+
+| Pattern ID | When it matches | Fix hint (summary) |
+|---|---|---|
+| `swiftdata.modelcontext-actor-cycle` | `ModelContext` + `DefaultSerialModelExecutor` (or `ModelExecutor`) + `Actor` in chain | Apple-documented quirk on iOS 17 (FB13844786, fixed in iOS 18 beta 1). Prefer the `@ModelActor` macro over hand-rolled executors; or hold `ModelContext` weakly inside a custom executor and re-resolve per operation. |
+
 **Confidence tiers**: each pattern returns `high`, `medium`, or `low` based on how many specific signals match. If multiple patterns fire on the same cycle, all matches are returned — the highest-confidence one is `primaryMatch`, the rest are in `allMatches`.
 
 **Static analysis bridge (v1.6+)**: every classified cycle now carries a `staticAnalysisHint` field with three sub-fields:
@@ -165,7 +177,20 @@ Reinforces the differentiator: **memorydetective sees the runtime evidence linte
 - `concurrency.async-sequence-on-self` → `null` rule, with note that `[weak self]` does NOT help here
 - `delegate.strong-reference` → `weak_delegate` (SwiftLint catches it directly)
 
-**The hints are deliberately textual, not code patches.** That's by design — see the next section.
+**Fix template (v1.7+)**: every classified cycle also carries a `fixTemplate` with concrete Swift before/after code snippets. The agent reads the template, then adapts type/method names to the user's codebase via `swiftGetSymbolDefinition` / `swiftSearchPattern`. Example output for `combine.sink-store-self-capture`:
+
+```jsonc
+{
+  "fixTemplate": {
+    "before": "pub.sink { v in self.value = v }.store(in: &bag) // ⚠️ retains self",
+    "after": "pub.sink { [weak self] v in self?.value = v }.store(in: &bag)\n// OR for property-path: pub.assign(to: &$value)"
+  }
+}
+```
+
+Where `staticAnalysisHint` says **which** linter rule complements this, `fixTemplate` shows **what** the fix actually looks like in code.
+
+**The textual `fixHint` remains deliberately prose, not code.** It explains the *why*; `fixTemplate` shows the *what*. The agent uses both.
 
 ---
 

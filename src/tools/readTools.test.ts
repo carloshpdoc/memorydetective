@@ -224,9 +224,9 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(classified[0].primaryMatch).toBeNull();
   });
 
-  it("PATTERNS array contains 33 patterns in v1.6 (8 v1.0 + 16 v1.4 + 3 v1.5 + 6 v1.6)", () => {
+  it("PATTERNS array contains 34 patterns in v1.7 (8 v1.0 + 16 v1.4 + 3 v1.5 + 6 v1.6 + 1 v1.7)", () => {
     const ids = PATTERNS.map((p) => p.id);
-    expect(ids.length).toBe(33);
+    expect(ids.length).toBe(34);
     // Spot-check key v1.0 patterns are still there.
     expect(ids).toContain("swiftui.tag-index-projection");
     expect(ids).toContain("combine.sink-store-self-capture");
@@ -246,6 +246,8 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(ids).toContain("concurrency.notificationcenter-async-observer-task");
     expect(ids).toContain("swiftui.observations-closure-strong-self");
     expect(ids).toContain("webkit.wkscriptmessagehandler-bridge");
+    // Spot-check v1.7 addition.
+    expect(ids).toContain("swiftdata.modelcontext-actor-cycle");
   });
 });
 
@@ -572,5 +574,53 @@ describe("classifyCycle — v1.6 catalog expansion (Swift 6 / Observation / Swif
       (m) => m.patternId === "webkit.wkscriptmessagehandler-bridge",
     );
     expect(bridgeMatch).toBeUndefined();
+  });
+});
+
+describe("classifyCycle — v1.7 catalog (SwiftData + Actor)", () => {
+  it("matches `swiftdata.modelcontext-actor-cycle` for all three signals (ModelContext + Executor + Actor) and surfaces fixTemplate + staticAnalysisHint", () => {
+    const r = makeReport("MyDataActor", [
+      "ModelContext",
+      "DefaultSerialModelExecutor",
+      "_Concurrency.Actor",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "swiftdata.modelcontext-actor-cycle",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+    // v1.7 wiring: every classified pattern now carries a fixTemplate AND a
+    // staticAnalysisHint alongside the textual fixHint.
+    expect(classified[0].primaryMatch?.fixTemplate?.after).toContain(
+      "@ModelActor",
+    );
+    expect(classified[0].primaryMatch?.staticAnalysisHint).toBeTruthy();
+  });
+
+  it("`swiftdata.modelcontext-actor-cycle` falls back to medium when Actor isn't visible in chain", () => {
+    const r = makeReport("DataLayer", ["ModelContext", "DefaultSerialModelExecutor"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "swiftdata.modelcontext-actor-cycle",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("medium");
+  });
+
+  it("`swiftdata.modelcontext-actor-cycle` falls back to low when only ModelContext appears", () => {
+    const r = makeReport("DataStore", ["ModelContext", "PersistentModel"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "swiftdata.modelcontext-actor-cycle",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("low");
+  });
+
+  it("does NOT match for non-SwiftData chains", () => {
+    const r = makeReport("MyClass", ["UIView", "UILabel"]);
+    const { classified } = classifyReport(r);
+    const swiftDataMatch = classified[0].allMatches.find(
+      (m) => m.patternId === "swiftdata.modelcontext-actor-cycle",
+    );
+    expect(swiftDataMatch).toBeUndefined();
   });
 });

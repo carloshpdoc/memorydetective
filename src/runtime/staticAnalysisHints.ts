@@ -247,6 +247,17 @@ const HINTS: Record<string, StaticAnalysisHint> = {
     explanation:
       "No static rule. The 3-link cycle requires a class to both own a `WKWebView` AND conform to `WKScriptMessageHandler` — detectable at runtime via the memgraph but not via SwiftLint conformance analysis.",
   },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // v1.7 catalog
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "swiftdata.modelcontext-actor-cycle": {
+    rule: null,
+    url: "https://developer.apple.com/forums/thread/748042",
+    explanation:
+      "No static rule. The cycle is between Apple-provided types (`Actor` / `DefaultSerialModelExecutor` / `ModelContext`) — SwiftLint can't reason about Apple-framework retain semantics. Apple fixed the framework-level shape in iOS 18 beta 1 (FB13844786). Until your minimum target is iOS 18+, the user-code shape persists.",
+  },
 };
 
 /** Returns the static-analysis hint for a given pattern, or null if unknown. */

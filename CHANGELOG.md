@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-05-03
+
+Catalog grows from 33 to **34 patterns** (SwiftData `@Actor` cycle), every classification now ships a **`fixTemplate` field** with Swift before/after snippets the agent can adapt directly, and a new **`compareTracesByPattern` tool** does for `.trace` bundles what `verifyFix` does for memgraphs. 27 → 28 MCP tools.
+
+### Added
+
+- **`swiftdata.modelcontext-actor-cycle`** cycle pattern. Fires when a `ModelContext` + `DefaultSerialModelExecutor` (or `ModelExecutor`) + `Actor` appear together in the chain. Apple-documented quirk (FB13844786) — fixed at the framework level in iOS 18 beta 1, but the user-code shape persists on older targets and on hand-rolled executors. Sourced from [Apple Developer Forums #748042](https://developer.apple.com/forums/thread/748042). Confidence-tiered: `high` when all three signals coexist, `medium` for ModelContext + Executor without an Actor in chain, `low` when only ModelContext is visible.
+- **`fixTemplate` field** on every `PatternMatch`. Each pattern now carries a Swift code snippet showing the typical before/after. The agent reads the template and adapts type/method names to the user's codebase via the SourceKit-LSP source-bridging tools. Implemented in `src/runtime/fixTemplates.ts` with a 1:1-coverage test guard against `PATTERNS`. Where `staticAnalysisHint` (v1.6) says *which* linter rule would catch a pattern, `fixTemplate` shows *what* the fix looks like in code. Both ride alongside the original textual `fixHint`.
+- **`compareTracesByPattern` tool** — trace-side counterpart to `verifyFix`. Takes a before/after pair of `.trace` bundles + a category (`hangs`, `animation-hitches`, or `app-launch`) + optional thresholds, and returns a PASS/PARTIAL/FAIL verdict plus before/after stats and deltas. Threshold semantics: hangs PASS when longest is below `hangsMaxLongestMs` (default 0); hitches PASS when longest is below `hitchesMaxLongestMs` (default 100ms — Apple's user-perceptible threshold); app-launch PASS when total is below `appLaunchMaxTotalMs` (default 1000ms). Designed for CI gating: a hangs-fix PR's before/after traces gate the merge. Tagged `[mg.trace][mg.ci]`.
+
+### Changed
+
+- README: new "What's new in v1.7" callout. Pattern catalog count `33 → 34`. Tool count `27 → 28`. CI / test integration subsection grows from 1 to 2 tools. Resources section now lists 34 entries. The "Adding a cycle pattern" workflow gains a 4th step: add a `fixTemplate` entry alongside the `staticAnalysisHint`.
+- USAGE.md section 2 gains a v1.7 sub-table with the new SwiftData+Actor pattern + a paragraph explaining the new `fixTemplate` field with a concrete JSON example. Updated header note describes the per-pattern triple now returned: `fixHint` (prose), `staticAnalysisHint` (linter rule or gap), and `fixTemplate` (code).
+- Test count: 183 → 206 (23 new — 4 for the swiftdata pattern + edge cases, 8 for `fixTemplates` coverage and content, 11 for `compareTracesByPattern` verdict logic).
+
+### Notes
+
+- No breaking changes — `fixTemplate` is an optional new field on `PatternMatch`. Old callers that ignore it continue to work.
+- Catalog now covers 34 distinct cycle shapes; the `fixTemplate` content is the most user-visible upgrade. Each template is intentionally minimal (just enough to demonstrate the shape of the fix); the agent fills in real type/method names from the surrounding code.
+- The `@ModelActor` recommendation in the SwiftData fix template only applies on iOS 17+ where the macro is available. The fallback (custom executor with weak ModelContext) is provided for older targets.
+
 ## [1.6.0] — 2026-05-03
 
 Catalog grows from 27 to **33 patterns** (Swift 6 / Observation / SwiftData / NavigationStack era), the server adopts MCP **Resources** + **Prompts** beyond raw Tools, every classification now carries a `staticAnalysisHint` bridging to SwiftLint, and the `--version` drift bug from earlier is fixed.

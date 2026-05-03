@@ -9,6 +9,10 @@ import {
   getStaticAnalysisHint,
   type StaticAnalysisHint,
 } from "../runtime/staticAnalysisHints.js";
+import {
+  getFixTemplate,
+  type FixTemplate,
+} from "../runtime/fixTemplates.js";
 import type { CycleNode, LeaksReport, NextCallSuggestion } from "../types.js";
 
 export const classifyCycleSchema = z.object({
@@ -41,6 +45,12 @@ export interface PatternMatch {
    * rule exists. Populated for every catalog pattern.
    */
   staticAnalysisHint?: StaticAnalysisHint;
+  /**
+   * Optional Swift code template showing typical before/after for the fix.
+   * Populated for every catalog pattern. The agent adapts the snippet to
+   * the user's actual type/method names via the SourceKit-LSP tools.
+   */
+  fixTemplate?: FixTemplate;
 }
 
 export interface CycleClassification {
@@ -668,6 +678,42 @@ export const PATTERNS: PatternDefinition[] = [
       return null;
     },
   },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // v1.7 catalog — SwiftData + Actor cycle (deferred from v1.6 as low
+  // priority). Apple fixed at the framework level in iOS 18 beta 1
+  // (FB13844786) but the user-code shape persists on older targets.
+  // Source: Apple Developer Forums #748042.
+  // ────────────────────────────────────────────────────────────────────────
+
+  {
+    id: "swiftdata.modelcontext-actor-cycle",
+    name: "SwiftData ModelContext retained by actor through DefaultSerialModelExecutor",
+    fixHint:
+      "An `Actor` instance retains a `DefaultSerialModelExecutor`, which retains a `ModelContext`, which (via the executor's reference back to the actor for serialization) closes a cycle. Apple fixed the framework-level shape in iOS 18 beta 1 (FB13844786), but the bug reproduces in user code on older targets and in some custom executor patterns. Fix: prefer `@ModelActor`-generated executors over hand-rolled ones; or, when you must roll your own, hold the `ModelContext` weakly inside the executor and re-resolve it per operation rather than caching it. Always provide a `deinit` on the actor that calls `try? context.save()` and explicitly clears the executor reference.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasModelContext = classes.some(
+        (c) =>
+          c.includes("ModelContext") ||
+          c.includes("ModelContainer") ||
+          c.includes("PersistentModel"),
+      );
+      const hasExecutor = classes.some(
+        (c) =>
+          c.includes("DefaultSerialModelExecutor") ||
+          c.includes("ModelActor") ||
+          c.includes("ModelExecutor"),
+      );
+      const hasActor = classes.some(
+        (c) => c.includes("Actor") || c.includes("_Concurrency.Actor"),
+      );
+      if (hasModelContext && hasExecutor && hasActor) return "high";
+      if (hasModelContext && hasExecutor) return "medium";
+      if (hasModelContext) return "low";
+      return null;
+    },
+  },
 ];
 
 /** Pure: classify each ROOT CYCLE in the parsed report. */
@@ -694,6 +740,7 @@ export function classifyReport(
         const conf = p.match(root, allClasses);
         if (conf) {
           const hint = getStaticAnalysisHint(p.id);
+          const template = getFixTemplate(p.id);
           matches.push({
             patternId: p.id,
             name: p.name,
@@ -701,6 +748,7 @@ export function classifyReport(
             reason: `Pattern ${p.id} matched`,
             fixHint: p.fixHint,
             ...(hint ? { staticAnalysisHint: hint } : {}),
+            ...(template ? { fixTemplate: template } : {}),
           });
         }
       }

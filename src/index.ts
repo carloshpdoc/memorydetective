@@ -76,6 +76,10 @@ import {
 } from "./tools/getInvestigationPlaybook.js";
 import { verifyFix, verifyFixSchema } from "./tools/verifyFix.js";
 import {
+  compareTracesByPattern,
+  compareTracesByPatternSchema,
+} from "./tools/compareTracesByPattern.js";
+import {
   swiftGetSymbolDefinition,
   swiftGetSymbolDefinitionSchema,
   swiftFindSymbolReferences,
@@ -514,6 +518,20 @@ server.registerTool(
   },
   async (input) => {
     const result = await verifyFix(input);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "compareTracesByPattern",
+  {
+    title: "Compare before/after .trace bundles for a perf regression target",
+    description:
+      "[mg.trace][mg.ci] Trace-side counterpart to `verifyFix`. Compares two `.trace` bundles for a specific perf category (`hangs`, `animation-hitches`, or `app-launch`) and emits a PASS/PARTIAL/FAIL verdict plus before/after stats and deltas. Apply thresholds: hangs PASS when longest is below `hangsMaxLongestMs` (default 0); hitches PASS when longest is below `hitchesMaxLongestMs` (default 100ms — Apple's user-perceptible threshold); app-launch PASS when total is below `appLaunchMaxTotalMs` (default 1000ms).\n\nPipeline: capture before/after `.trace` (via `recordTimeProfile` or Xcode), then point this at the pair. The natural followup to a hangs/jank/launch fix PR.",
+    inputSchema: compareTracesByPatternSchema.shape,
+  },
+  async (input) => {
+    const result = await compareTracesByPattern(input);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   },
 );
