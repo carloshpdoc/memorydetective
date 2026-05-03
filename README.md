@@ -17,7 +17,7 @@
 - **MCP-native.** Plugs into Claude Code, Claude Desktop, Cursor, Cline, and any other MCP client. The agent drives the full investigate → classify → suggest-fix loop without you opening Instruments.
 - **Honest about its limits.** No mocked outputs, no over-promises. Hangs analysis works clean from `xctrace`; sample-level Time Profile is parsed when `xctrace` symbolicates the trace and returns a structured workaround notice when it can't (the underlying `xctrace` SIGSEGV on heavy unsymbolicated traces is an Apple-side limitation we surface explicitly). Memory Graph capture works on Mac apps and iOS simulator; physical iOS devices still need Xcode.
 
-> **What's new in v1.5** (2026-05-02): catalog grew from 24 to **27 cycle patterns** (Core Animation animation/layer delegate quirks + Core Data `NSFetchedResultsController`), and the new [What it saves you](#what-it-saves-you) section quantifies token + developer-time savings on a real investigation. Full notes in [CHANGELOG](./CHANGELOG.md).
+> **What's new in v1.6** (2026-05-03): catalog grew from 27 to **33 cycle patterns** (Swift 6 / `@Observable` / SwiftData / NavigationStack / async-sequence-on-self / WKScriptMessageHandler bridge), the server now exposes the catalog as **33 MCP Resources** + ships **5 investigation Prompts** (`/investigate-leak`, `/investigate-hangs`, `/investigate-jank`, `/investigate-launch`, `/verify-cycle-fix`), and every cycle classification now carries a `staticAnalysisHint` pointing at the SwiftLint rule (or explicit gap) that complements the runtime evidence. Full notes in [CHANGELOG](./CHANGELOG.md).
 
 ## Quickstart
 
@@ -258,11 +258,11 @@ Copilot's MCP integration moves fast — if this snippet is stale, see the [VS C
 
 ## API
 
-27 MCP tools, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[meta]`) so related tools are visible at a glance.
+**27 MCP tools + 33 Resources + 5 Prompts**, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[meta]`) so related tools are visible at a glance.
 
-Many tools include a `suggestedNextCalls` field in their response — a typed list of `{ tool, args, why }` entries pre-populated from the current result, so the orchestrating LLM can chain calls without re-reasoning. Start with `getInvestigationPlaybook(kind)` for the canonical sequence.
+Many tools include a `suggestedNextCalls` field in their response — a typed list of `{ tool, args, why }` entries pre-populated from the current result, so the orchestrating LLM can chain calls without re-reasoning. Start with `getInvestigationPlaybook(kind)` for the canonical sequence — or just type `/investigate-leak` (one of the [Prompts](#prompts-5)) in any client that exposes MCP slash commands.
 
-The cycle classifier ships **27 named antipatterns** spanning SwiftUI, Combine, Swift Concurrency, UIKit (Timer/CADisplayLink/UIGestureRecognizer/KVO/URLSession/WebKit/DispatchSource), Core Animation (CAAnimation/custom CALayer delegate quirks), Core Data (`NSFetchedResultsController`), Coordinator pattern, and the popular third-party libs RxSwift + Realm. Each pattern has a one-line fix hint and a confidence tier.
+The cycle classifier ships **33 named antipatterns** spanning SwiftUI (including the Swift 6 / `@Observable` / SwiftData / NavigationStack era), Combine, Swift Concurrency (incl. AsyncSequence-on-self and the new `Observations` API), UIKit (Timer/CADisplayLink/UIGestureRecognizer/KVO/URLSession/WebKit/DispatchSource), Core Animation, Core Data, Coordinator pattern, and the popular third-party libs RxSwift + Realm. Each pattern carries a one-line fix hint, a confidence tier, AND a `staticAnalysisHint` field pointing at the SwiftLint rule (`weak_self`, `weak_delegate`) that would have caught it at parse time — or an explicit gap notice when no static rule exists. Reinforces the differentiator: memorydetective sees the runtime evidence linters miss.
 
 ### Read & analyze (13)
 
@@ -275,7 +275,7 @@ The cycle classifier ships **27 named antipatterns** spanning SwiftUI, Combine, 
 | `reachableFromCycle` | Cycle-scoped reachability. "How many `<X>` instances are reachable from the cycle rooted at `<Y>`?" — distinguishes the actual culprit from its retained dependencies. |
 | `diffMemgraphs` | Compare two `.memgraph` snapshots: total deltas + class-count changes + cycles new/gone/persisted. |
 | `verifyFix` | Cycle-semantic diff: per-pattern PASS/PARTIAL/FAIL verdict + bytes freed. CI-gateable. |
-| `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of **27 named antipatterns** (SwiftUI / Combine / Concurrency / UIKit / Core Animation / Core Data / Coordinator / RxSwift / Realm) with confidence + fix hint. |
+| `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of **33 named antipatterns** (SwiftUI / Combine / Concurrency / UIKit / Core Animation / Core Data / Coordinator / RxSwift / Realm) with confidence + fix hint + `staticAnalysisHint` (which SwiftLint rule complements this, or explicit gap). |
 | `analyzeHangs` | Parse `xctrace` `potential-hangs` schema; return Hang vs Microhang counts + top N longest. |
 | `analyzeAnimationHitches` | Parse `xctrace` `animation-hitches` schema; report by-type counts and how many hitches crossed Apple's user-perceptible 100ms threshold. |
 | `analyzeTimeProfile` | Parse `xctrace` `time-profile` schema; return top symbols by sample count. Reports SIGSEGV with workarounds when xctrace can't symbolicate. |
@@ -326,6 +326,33 @@ These tools require macOS + Xcode (full Xcode, not just Command Line Tools — `
 
 > **Why `captureMemgraph` doesn't work on physical iOS devices**: `leaks(1)` only attaches to processes running on the local Mac (which includes iOS simulators). Memory Graph capture from a real device goes through Xcode's debugger over USB/lockdownd — different mechanism, no public CLI equivalent.
 
+### Resources (33)
+
+The cycle-pattern catalog is also surfaced as MCP resources, browsable at `memorydetective://patterns/{patternId}`. Each resource is a markdown body with the pattern name, a longer description, and the fix hint. Use this to let an agent (or a human in a UI-aware MCP client) browse the catalog without burning a `classifyCycle` call.
+
+```
+memorydetective://patterns/swiftui.tag-index-projection
+memorydetective://patterns/concurrency.async-sequence-on-self
+memorydetective://patterns/webkit.wkscriptmessagehandler-bridge
+…
+```
+
+`resources/list` returns all 33 entries. `resources/read` resolves any `memorydetective://patterns/{id}` URI to its markdown body.
+
+### Prompts (5)
+
+Investigation playbooks are exposed as MCP prompts (slash commands in clients that surface them, e.g. Claude Code).
+
+| Slash command | What it does | Args |
+|---|---|---|
+| `/investigate-leak` | Runs the canonical 6-step memgraph-leak investigation: `analyzeMemgraph` → `classifyCycle` → `reachableFromCycle` → `swiftSearchPattern` → `swiftGetSymbolDefinition` → `swiftFindSymbolReferences`. | `memgraphPath` |
+| `/investigate-hangs` | Diagnose user-visible main-thread hangs from a `.trace`. | `tracePath` |
+| `/investigate-jank` | Diagnose dropped frames / animation hitches from a `.trace`. | `tracePath` |
+| `/investigate-launch` | Diagnose cold/warm launch slowness from a `.trace`. | `tracePath` |
+| `/verify-cycle-fix` | Diff a before/after pair of `.memgraph` snapshots to confirm a fix landed. | `before`, `after` |
+
+Each prompt fills the canonical playbook's argument templates with the user-provided values, then hands the agent a ready-to-execute brief. Calls the same tools listed in [Read & analyze](#read--analyze-13) — prompts are an orchestration shortcut, not a separate engine.
+
 ### CLI mode
 
 The same binary is also a thin CLI for scripting and CI:
@@ -363,15 +390,16 @@ npm run dev               # tsx, stdio mode (dev mode)
 Contributions are welcome — bug reports, feature requests, new cycle patterns, all of it.
 
 - **Bugs / feature requests**: [open an issue](https://github.com/carloshpdoc/memorydetective/issues).
-- **PRs**: fork → branch → `npm install` → make changes → `npm test` (152 tests must stay green) → open a PR with a concise description of what changed and why.
+- **PRs**: fork → branch → `npm install` → make changes → `npm test` (183 tests must stay green) → open a PR with a concise description of what changed and why.
 
 ### Adding a cycle pattern to `classifyCycle`
 
-`classifyCycle` ships with 27 built-in patterns covering SwiftUI, Combine, Swift Concurrency, UIKit (Timer / CADisplayLink / UIGestureRecognizer / KVO / URLSession / WebKit / DispatchSource), Core Animation, Core Data, the Coordinator pattern, RxSwift, and Realm. To add one:
+`classifyCycle` ships with 33 built-in patterns covering SwiftUI (incl. Swift 6 / `@Observable` / SwiftData / NavigationStack), Combine, Swift Concurrency (incl. AsyncSequence-on-self and `Observations`), UIKit (Timer / CADisplayLink / UIGestureRecognizer / KVO / URLSession / WebKit / DispatchSource), Core Animation, Core Data, the Coordinator pattern, RxSwift, and Realm. To add one:
 
 1. Edit `src/tools/classifyCycle.ts` — add an entry to `PATTERNS` with `id`, `name`, `fixHint`, and a `match` function.
 2. Add a test in `src/tools/readTools.test.ts` that asserts the new pattern fires against a representative memgraph fixture.
-3. Open a PR.
+3. Add a `staticAnalysisHint` entry in `src/runtime/staticAnalysisHints.ts` (the test in that file enforces 1:1 coverage with `PATTERNS`).
+4. Open a PR.
 
 ## Support this project
 

@@ -224,9 +224,9 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(classified[0].primaryMatch).toBeNull();
   });
 
-  it("PATTERNS array contains 27 patterns in v1.5 (8 v1.0 + 16 v1.4 + 3 v1.5)", () => {
+  it("PATTERNS array contains 33 patterns in v1.6 (8 v1.0 + 16 v1.4 + 3 v1.5 + 6 v1.6)", () => {
     const ids = PATTERNS.map((p) => p.id);
-    expect(ids.length).toBe(27);
+    expect(ids.length).toBe(33);
     // Spot-check key v1.0 patterns are still there.
     expect(ids).toContain("swiftui.tag-index-projection");
     expect(ids).toContain("combine.sink-store-self-capture");
@@ -239,6 +239,13 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(ids).toContain("coreanimation.animation-delegate-strong");
     expect(ids).toContain("coreanimation.layer-delegate-cycle");
     expect(ids).toContain("coredata.fetchedresultscontroller-delegate");
+    // Spot-check v1.6 additions.
+    expect(ids).toContain("swiftui.observable-state-modal-leak");
+    expect(ids).toContain("swiftui.navigationpath-stored-in-viewmodel");
+    expect(ids).toContain("concurrency.async-sequence-on-self");
+    expect(ids).toContain("concurrency.notificationcenter-async-observer-task");
+    expect(ids).toContain("swiftui.observations-closure-strong-self");
+    expect(ids).toContain("webkit.wkscriptmessagehandler-bridge");
   });
 });
 
@@ -444,5 +451,126 @@ describe("classifyCycle — v1.5 catalog completion", () => {
     expect(classified[0].primaryMatch?.patternId).toBe(
       "coredata.fetchedresultscontroller-delegate",
     );
+  });
+});
+
+describe("classifyCycle — v1.6 catalog expansion (Swift 6 / Observation / SwiftData / NavigationStack)", () => {
+  it("matches `swiftui.observable-state-modal-leak` when ObservationRegistrar + sheet host appear", () => {
+    const r = makeReport("MyAppViewModel", [
+      "_$ObservationRegistrar",
+      "_OptionalContent",
+      "MyAppViewModel",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "swiftui.observable-state-modal-leak",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("`swiftui.observable-state-modal-leak` falls back to low when only ObservationRegistrar appears", () => {
+    const r = makeReport("MyVM", ["_$ObservationRegistrar", "MyVM"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "swiftui.observable-state-modal-leak",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("low");
+  });
+
+  it("matches `swiftui.navigationpath-stored-in-viewmodel` for NavigationPath in chain", () => {
+    const r = makeReport("RouterVM", ["NavigationPath", "RouterVM"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "swiftui.navigationpath-stored-in-viewmodel",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("matches `concurrency.async-sequence-on-self` when AsyncSequence + Task<...> appear", () => {
+    const r = makeReport("FeedVM", [
+      "AsyncMapSequence",
+      "_Concurrency.Task<Swift.Void, Swift.Never>",
+      "FeedVM",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "concurrency.async-sequence-on-self",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("`concurrency.async-sequence-on-self` falls back to medium without Task in chain", () => {
+    const r = makeReport("FeedVM", ["AsyncIteratorProtocol", "FeedVM"]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "concurrency.async-sequence-on-self",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("medium");
+  });
+
+  it("matches `concurrency.notificationcenter-async-observer-task` for the notifications(named:) shape", () => {
+    const r = makeReport("Listener", [
+      "NotificationCenter.Notifications",
+      "_Concurrency.Task<Swift.Void, Swift.Never>",
+    ]);
+    const { classified } = classifyReport(r);
+    // Both notificationcenter-async-observer-task AND async-sequence-on-self
+    // could fire here; the more specific one should be primary because they
+    // both score high but the specific one's heuristic is tighter.
+    const ids = classified[0].allMatches.map((m) => m.patternId);
+    expect(ids).toContain("concurrency.notificationcenter-async-observer-task");
+  });
+
+  it("matches `swiftui.observations-closure-strong-self` for Observations + Closure context", () => {
+    const r = makeReport("WatcherVM", [
+      "Observations<Foo>",
+      "Closure context",
+      "WatcherVM",
+    ]);
+    const { classified } = classifyReport(r);
+    expect(classified[0].primaryMatch?.patternId).toBe(
+      "swiftui.observations-closure-strong-self",
+    );
+    expect(classified[0].primaryMatch?.confidence).toBe("high");
+  });
+
+  it("`swiftui.observations-closure-strong-self` does NOT match for ObservationRegistrar (different shape)", () => {
+    // ObservationRegistrar is the @Observable backing — different from the
+    // Observations { } API.
+    const r = makeReport("VM", ["_$ObservationRegistrar"]);
+    const { classified } = classifyReport(r);
+    const observationsMatch = classified[0].allMatches.find(
+      (m) => m.patternId === "swiftui.observations-closure-strong-self",
+    );
+    expect(observationsMatch).toBeUndefined();
+  });
+
+  it("`webkit.wkscriptmessagehandler-bridge` fires alongside the broader v1.4 WK pattern when all three signals appear", () => {
+    const r = makeReport("MyWebBridge", [
+      "WKWebView",
+      "WKUserContentController",
+      "WKScriptMessageHandler",
+      "MyWebBridge",
+    ]);
+    const { classified } = classifyReport(r);
+    const ids = classified[0].allMatches.map((m) => m.patternId);
+    // Both should fire — the v1.4 broad one matches any WK class, the v1.6
+    // specific one matches the 3-link bridge shape. Primary tie-broken by
+    // declaration order, but both are useful matches.
+    expect(ids).toContain("webkit.scriptmessage-handler-strong");
+    expect(ids).toContain("webkit.wkscriptmessagehandler-bridge");
+    const bridgeMatch = classified[0].allMatches.find(
+      (m) => m.patternId === "webkit.wkscriptmessagehandler-bridge",
+    );
+    expect(bridgeMatch?.confidence).toBe("high");
+  });
+
+  it("`webkit.wkscriptmessagehandler-bridge` does NOT fire when only WKWebView appears (no handler/bridge signal)", () => {
+    const r = makeReport("VC", ["WKWebView"]);
+    const { classified } = classifyReport(r);
+    const bridgeMatch = classified[0].allMatches.find(
+      (m) => m.patternId === "webkit.wkscriptmessagehandler-bridge",
+    );
+    expect(bridgeMatch).toBeUndefined();
   });
 });

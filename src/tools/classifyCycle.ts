@@ -5,6 +5,10 @@ import {
   pickPrimaryAppClass,
   suggestionsForClassification,
 } from "../runtime/suggestions.js";
+import {
+  getStaticAnalysisHint,
+  type StaticAnalysisHint,
+} from "../runtime/staticAnalysisHints.js";
 import type { CycleNode, LeaksReport, NextCallSuggestion } from "../types.js";
 
 export const classifyCycleSchema = z.object({
@@ -31,6 +35,12 @@ export interface PatternMatch {
   reason: string;
   /** Suggested fix direction (one-liner). */
   fixHint: string;
+  /**
+   * Optional bridge to static analysis: which SwiftLint rule (if any) would
+   * have caught this cycle at parse time, or an explicit gap notice when no
+   * rule exists. Populated for every catalog pattern.
+   */
+  staticAnalysisHint?: StaticAnalysisHint;
 }
 
 export interface CycleClassification {
@@ -519,6 +529,145 @@ export const PATTERNS: PatternDefinition[] = [
       return hasFrc ? "high" : null;
     },
   },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // v1.6 catalog expansion — 6 patterns for the Swift 6 / Observation /
+  // SwiftData / NavigationStack era. Sourced from Apple Developer Forums
+  // (#736110, #716804, #748042, #22795), Swift Forums (#64584, #77257),
+  // Donny Wals on the Observations API, and the Embrace WKWebView writeup.
+  // ────────────────────────────────────────────────────────────────────────
+
+  {
+    id: "swiftui.observable-state-modal-leak",
+    name: "@Observable class held as @State across modal presentation",
+    fixHint:
+      "Passing a reference type marked `@Observable` as `@State` to a modally-presented view can leak the model: SwiftUI's internal sheet-presentation infrastructure (around `_OptionalContent` / `_SheetPresentationModifier`) retains the value across dismiss cycles. Apple confirmed fixed in iOS 17.x, but reproduces in user code on older targets. Move the observable to `@StateObject`/`@State` on the *parent* and pass it down via `@Bindable`, or use the new `.sheet(item:)` form with a local-scope value type. Do not store the same `@Observable` model as `@State` inside the modal content view itself.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasObservable = classes.some(
+        (c) =>
+          c.includes("_$ObservationRegistrar") ||
+          c.includes("ObservationRegistrar") ||
+          c.includes("_ObservableType"),
+      );
+      const hasModal = classes.some(
+        (c) =>
+          c.includes("_OptionalContent") ||
+          c.includes("SheetPresentation") ||
+          c.includes("PresentedViewController") ||
+          c.includes("PresentationHostingController"),
+      );
+      if (hasObservable && hasModal) return "high";
+      if (hasObservable) return "low";
+      return null;
+    },
+  },
+  {
+    id: "swiftui.navigationpath-stored-in-viewmodel",
+    name: "NavigationPath retains every element ever pushed into it",
+    fixHint:
+      "`NavigationPath` is a value type, but storing it on a class (typically a view-model exposed to the view) creates an append-only retention chain: every destination value pushed into the path is held until the entire path is replaced. Apple feedback `FB11643551` is still unfixed as of iOS 17. Either keep the path local to the view via `@State var path = NavigationPath()`, or, when you must persist it across view-model lifecycles, periodically reset it with `path = NavigationPath()` after `popToRoot()`-style navigations. Avoid storing destination view-model references *as* NavigationPath elements — store identifiers and resolve to view-models lazily.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasPath = classes.some(
+        (c) =>
+          c.includes("NavigationPath") ||
+          c.includes("AnyHashableStorageBase") ||
+          c.includes("NavigationStackStore"),
+      );
+      return hasPath ? "high" : null;
+    },
+  },
+  {
+    id: "concurrency.async-sequence-on-self",
+    name: "`for await` over an infinite AsyncSequence pins self via the consuming Task",
+    fixHint:
+      "`for await value in someSequence { use(self) }` inside a `Task { }` stored on `self` creates a cycle that no `[weak self]` capture list can break: the iteration *itself* holds `self` strongly via the closure context the compiler synthesizes. If the sequence never terminates (infinite stream, NotificationCenter feed, AsyncChannel), the task never completes and `deinit` never fires. Fix by capturing only the values you need *outside* the loop body: `let tracker = self.tracker; Task { for await v in seq { await tracker.handle(v) } }`. For infinite sequences, store the Task as `private var observation: Task<Void, Never>?` and call `observation?.cancel()` in `deinit`.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasAsyncSeq = classes.some(
+        (c) =>
+          c.includes("AsyncSequence") ||
+          c.includes("AsyncMapSequence") ||
+          c.includes("AsyncFilterSequence") ||
+          c.includes("AsyncCompactMapSequence") ||
+          c.includes("AsyncIteratorProtocol"),
+      );
+      const hasTask = classes.some(
+        (c) =>
+          c.includes("_Concurrency.Task") || /\bTask<[^>]+>/.test(c),
+      );
+      if (hasAsyncSeq && hasTask) return "high";
+      if (hasAsyncSeq) return "medium";
+      return null;
+    },
+  },
+  {
+    id: "concurrency.notificationcenter-async-observer-task",
+    name: "`for await ... in NotificationCenter.notifications(named:)` retains self forever",
+    fixHint:
+      "Special case of `concurrency.async-sequence-on-self` — `NotificationCenter.default.notifications(named:)` returns an `AsyncSequence` that never terminates implicitly, so the consuming Task never completes and pins whatever it touches. Even `[weak self]` doesn't help because the iteration itself holds the actor isolation context. Fix: explicitly cancel the Task in `deinit`/`onDisappear`, store it as `private var observation: Task<Void, Never>?`, and prefer `for await _ in seq { let me = self; await me?.handle() }` instead of capturing self via the loop body.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasNotifAsync = classes.some(
+        (c) =>
+          c.includes("NotificationCenter.Notifications") ||
+          c.includes("NSNotification.Notifications") ||
+          (c.includes("NotificationCenter") && c.includes("AsyncSequence")),
+      );
+      return hasNotifAsync ? "high" : null;
+    },
+  },
+  {
+    id: "swiftui.observations-closure-strong-self",
+    name: "Swift 6.2 `Observations { }` closure retains self",
+    fixHint:
+      "The Swift 6.2 / Xcode 26 `Observations` API is the non-SwiftUI way to react to `@Observable` property changes. Each call to the closure happens whenever an observed property changes — internally `Observations` retains the closure to re-invoke it, and the closure usually captures `self` via property reads. Result: classic strong-closure cycle. Capture `[weak self]` inside the closure body just like you would for `Combine.sink` or `KVO.observe`. This pattern is *not* the same as inside SwiftUI body re-evaluation, where the dependency tracker manages closure lifetime for you. NEW API — ship classifier match at `confidence: probable` until validated against more real-world memgraphs.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasObservations = classes.some(
+        (c) =>
+          c.includes("Observations") &&
+          !c.includes("ObservationRegistrar") &&
+          !c.includes("ObservationTracking"),
+      );
+      const hasClosure = classes.some((c) => c.includes("Closure context"));
+      if (hasObservations && hasClosure) return "high";
+      if (hasObservations) return "medium";
+      return null;
+    },
+  },
+  {
+    id: "webkit.wkscriptmessagehandler-bridge",
+    name: "WKScriptMessageHandler bridge: handler ↔ webview ↔ contentController cycle",
+    fixHint:
+      "`WKUserContentController.add(_:name:)` strong-retains its `WKScriptMessageHandler`. When the handler is also the *bridge* class that owns the `WKWebView` (typical pattern: a `WebViewBridge` exposes JS-callable methods to the page), you get a 3-link cycle: bridge → webView → configuration → userContentController → bridge. Fix: wrap the handler in a `WeakScriptMessageHandler` proxy class that holds the real handler weakly; or call `userContentController.removeScriptMessageHandler(forName:)` for every name added before the WKWebView is removed from its hierarchy. Setting the handler to `nil` is not enough — the strong retention is on the controller, not on the handler property.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasWK = classes.some(
+        (c) =>
+          c.includes("WKUserContentController") ||
+          c.includes("WKScriptMessageHandler") ||
+          c.includes("WKWebView") ||
+          c.includes("WKWebViewConfiguration"),
+      );
+      // Already covered by webkit.scriptmessage-handler-strong with broader
+      // signal; this pattern fires *additionally* when both the handler-named
+      // class AND the WKWebView appear in the same cycle (the "bridge" shape).
+      const hasHandler = classes.some(
+        (c) =>
+          c.includes("WKScriptMessageHandler") || /Bridge$|Handler$/.test(c),
+      );
+      const hasWebView = classes.some(
+        (c) => c.includes("WKWebView") || c.includes("WKWebViewConfiguration"),
+      );
+      // Only fire when all three signals coexist — that's the actual bridge
+      // shape. The broader `webkit.scriptmessage-handler-strong` (v1.4)
+      // already covers the "any WK class appears" case at medium/high.
+      if (hasWK && hasHandler && hasWebView) return "high";
+      return null;
+    },
+  },
 ];
 
 /** Pure: classify each ROOT CYCLE in the parsed report. */
@@ -544,12 +693,14 @@ export function classifyReport(
       for (const p of PATTERNS) {
         const conf = p.match(root, allClasses);
         if (conf) {
+          const hint = getStaticAnalysisHint(p.id);
           matches.push({
             patternId: p.id,
             name: p.name,
             confidence: conf,
             reason: `Pattern ${p.id} matched`,
             fixHint: p.fixHint,
+            ...(hint ? { staticAnalysisHint: hint } : {}),
           });
         }
       }

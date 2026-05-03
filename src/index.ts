@@ -89,6 +89,13 @@ import {
 } from "./tools/swift/index.js";
 
 import { VERSION as SERVER_VERSION } from "./version.js";
+import {
+  listPatternResources,
+  patternUri,
+  readPatternResource,
+} from "./runtime/resources.js";
+import { PROMPTS, findPrompt } from "./runtime/prompts.js";
+import { z } from "zod";
 
 const SERVER_NAME = "memorydetective";
 
@@ -510,6 +517,73 @@ server.registerTool(
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   },
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP Resources — the cycle-pattern catalog as browsable URIs
+// ─────────────────────────────────────────────────────────────────────────────
+
+for (const res of listPatternResources()) {
+  server.registerResource(
+    res.name,
+    res.uri,
+    {
+      title: res.name,
+      description: res.description,
+      mimeType: res.mimeType,
+    },
+    async (uri) => {
+      const body = readPatternResource(uri.href);
+      if (!body) {
+        throw new Error(`Unknown resource URI: ${uri.href}`);
+      }
+      return {
+        contents: [
+          {
+            uri: body.uri,
+            mimeType: body.mimeType,
+            text: body.text,
+          },
+        ],
+      };
+    },
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP Prompts — investigation playbooks as named slash commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+for (const prompt of PROMPTS) {
+  const argsSchema: Record<string, z.ZodString> = {};
+  for (const arg of prompt.arguments) {
+    let schema = z.string().describe(arg.description);
+    if (!arg.required) {
+      // Optional args still represented as strings; leave required-ness to
+      // the prompt definition. (MCP SDK v1.x supports optional via .optional()
+      // but our prompts are all-required for now.)
+    }
+    argsSchema[arg.name] = schema;
+  }
+  server.registerPrompt(
+    prompt.name,
+    {
+      title: prompt.title,
+      description: prompt.description,
+      argsSchema,
+    },
+    (args) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: prompt.render(args as Record<string, string>),
+          },
+        },
+      ],
+    }),
+  );
+}
 
 async function main() {
   // CLI mode: when called with arguments, run the synchronous CLI wrapper.

@@ -282,5 +282,8 @@ export async function getInvestigationPlaybook(
   return { ok: true, playbook };
 }
 
-/** Exposed for tests. */
+/** Exposed for tests + the prompts surface. */
 export const PLAYBOOK_KINDS = Object.keys(PLAYBOOKS) as PlaybookKind[];
+
+/** Exposed for the prompts surface (see src/runtime/prompts.ts). */
+export { PLAYBOOKS };

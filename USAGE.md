@@ -94,9 +94,9 @@ Claude orchestrates the full flow (see [section 3](#3-how-fixes-actually-flow-fr
 
 ---
 
-## 2. The 27 cycle patterns and their fix hints
+## 2. The 33 cycle patterns and their fix hints
 
-`classifyCycle` ships with a built-in catalog of 27 common iOS retain-cycle patterns. Each pattern returns a `fixHint` — a plain-English string describing the fix direction. Patterns are grouped below by the framework / source they target.
+`classifyCycle` ships with a built-in catalog of 33 common iOS retain-cycle patterns. Each pattern returns a `fixHint` — a plain-English string describing the fix direction — plus an optional `staticAnalysisHint` field pointing at the SwiftLint rule (or explicit gap) that complements the runtime evidence. Patterns are grouped below by the framework / source they target.
 
 ### v1.0 core (8) — SwiftUI + Combine + Concurrency + Notifications
 
@@ -140,7 +140,30 @@ Claude orchestrates the full flow (see [section 3](#3-how-fixes-actually-flow-fr
 | `coreanimation.layer-delegate-cycle` | Custom `CALayer` subclass (`CAShapeLayer` / `CAGradientLayer` / `CAEmitterLayer` / `CAMetalLayer` / etc.) in chain without `UIView` auto-pairing | Custom layer wired to non-UIView delegate leaks. Wrap in `WeakLayerDelegate` or clear `layer.delegate = nil` in `deinit`. |
 | `coredata.fetchedresultscontroller-delegate` | `NSFetchedResultsController` / `_PFFetchedResultsController` in chain | Apple's historical strong-delegate quirk via the change-tracker. `frc.delegate = nil` in `viewWillDisappear` / `deinit`. |
 
+### v1.6 catalog expansion (6) — Swift 6 / Observation / SwiftData / NavigationStack era
+
+Sourced from Apple Developer Forums (#736110, #716804, #748042), Swift Forums (#64584, #77257), Donny Wals on the Swift 6.2 `Observations` API, and the Embrace WKWebView memory-leak writeup.
+
+| Pattern ID | When it matches | Fix hint (summary) |
+|---|---|---|
+| `swiftui.observable-state-modal-leak` | `_$ObservationRegistrar` + sheet/presentation host in chain | `@Observable` model passed as `@State` to a modal leaks. Move the model to `@StateObject` on the parent and pass via `@Bindable`, or use `.sheet(item:)` with a value type. |
+| `swiftui.navigationpath-stored-in-viewmodel` | `NavigationPath` / `NavigationStackStore` / `AnyHashableStorageBase` in chain | NavigationPath retains every element ever pushed (FB11643551, unfixed). Keep it `@State` local to the view, or reset with `path = NavigationPath()` after `popToRoot`. |
+| `concurrency.async-sequence-on-self` | `AsyncSequence` / `AsyncIteratorProtocol` + `Task<...>` in chain | `for await ... in seq { use(self) }` pins self via the iteration context — `[weak self]` does NOT help. Capture only the values needed before the loop, or `task.cancel()` in `deinit`. |
+| `concurrency.notificationcenter-async-observer-task` | `NotificationCenter.Notifications` (the `AsyncSequence` form) + `Task<...>` | Special case of the above — `for await _ in NotificationCenter.default.notifications(named:)` never terminates. Same fix discipline. |
+| `swiftui.observations-closure-strong-self` | `Observations` (the Swift 6.2 API, NOT `ObservationRegistrar`) + `Closure context` | The new non-SwiftUI `Observations { }` closure retains self like `Combine.sink`. Use `[weak self]` inside the closure. |
+| `webkit.wkscriptmessagehandler-bridge` | `WKWebView` + `WKUserContentController` + `WKScriptMessageHandler` (or `*Bridge`/`*Handler` class) all in chain | The 3-link bridge cycle: bridge → webView → contentController → bridge. Wrap the handler in `WeakScriptMessageHandler` proxy, or `removeScriptMessageHandler(forName:)` for every name added. Fires alongside the broader v1.4 `webkit.scriptmessage-handler-strong` pattern when the full bridge shape is present. |
+
 **Confidence tiers**: each pattern returns `high`, `medium`, or `low` based on how many specific signals match. If multiple patterns fire on the same cycle, all matches are returned — the highest-confidence one is `primaryMatch`, the rest are in `allMatches`.
+
+**Static analysis bridge (v1.6+)**: every classified cycle now carries a `staticAnalysisHint` field with three sub-fields:
+- `rule` — the SwiftLint rule that would have caught this at parse time (`weak_self`, `weak_delegate`, etc.), or `null` when no rule exists
+- `url` — link to the rule docs OR to the open issue tracking the gap (e.g. SwiftLint #776 for `@escaping` retain cycles)
+- `explanation` — plain-English description of the static-vs-runtime relationship
+
+Reinforces the differentiator: **memorydetective sees the runtime evidence linters miss**. Examples:
+- `combine.sink-store-self-capture` → `weak_self` (SwiftLint catches the closure form)
+- `concurrency.async-sequence-on-self` → `null` rule, with note that `[weak self]` does NOT help here
+- `delegate.strong-reference` → `weak_delegate` (SwiftLint catches it directly)
 
 **The hints are deliberately textual, not code patches.** That's by design — see the next section.
 
@@ -390,7 +413,54 @@ Every tool description starts with a category tag so related tools are visible a
 
 The tag is leading text in the MCP description, so it shows up in any tools/list output and inside Claude Code's "deferred tools" list.
 
-## 7. Where to go from here
+## 7. MCP Resources + Prompts (catalog browsing + slash commands)
+
+Since v1.6, memorydetective surfaces two MCP-spec features beyond raw Tools.
+
+### Resources — browsable cycle-pattern catalog
+
+Each of the 33 catalog patterns is exposed as a read-only MCP resource at `memorydetective://patterns/{patternId}`. The body is markdown — the pattern name, the fix hint, and a footer pointing at how it composes with `classifyCycle`'s `primaryMatch`.
+
+```jsonc
+// resources/list response (excerpt)
+{
+  "resources": [
+    {
+      "uri": "memorydetective://patterns/swiftui.tag-index-projection",
+      "name": "SwiftUI .tag(...) closure-over-self cycle",
+      "description": "SwiftUI .tag(...) closure-over-self cycle",
+      "mimeType": "text/markdown"
+    },
+    {
+      "uri": "memorydetective://patterns/concurrency.async-sequence-on-self",
+      "name": "`for await` over an infinite AsyncSequence pins self via the consuming Task",
+      "description": "`for await` over an infinite AsyncSequence pins self via the consuming Task",
+      "mimeType": "text/markdown"
+    },
+    …
+  ]
+}
+```
+
+**Why this matters:** an agent that needs to ask "do you cover X?" can browse the resource list cheaply (no tool call). A UI-aware client can render the catalog as a sidebar or completion source.
+
+### Prompts — investigation playbooks as slash commands
+
+Five prompts ship, one per investigation kind:
+
+| Prompt name | Surfaces in Claude Code as | Args | Equivalent tool sequence |
+|---|---|---|---|
+| `investigate-leak` | `/investigate-leak` | `memgraphPath` | `analyzeMemgraph` → `classifyCycle` → `reachableFromCycle` → `swiftSearchPattern` → `swiftGetSymbolDefinition` → `swiftFindSymbolReferences` |
+| `investigate-hangs` | `/investigate-hangs` | `tracePath` | `listTraceDevices` → `recordTimeProfile` (if needed) → `analyzeHangs` → `swiftSearchPattern` |
+| `investigate-jank` | `/investigate-jank` | `tracePath` | `recordTimeProfile` (Animation Hitches template) → `analyzeAnimationHitches` → `swiftFindSymbolReferences` |
+| `investigate-launch` | `/investigate-launch` | `tracePath` | `recordTimeProfile` (App Launch template) → `analyzeAppLaunch` → `swiftSearchPattern` |
+| `verify-cycle-fix` | `/verify-cycle-fix` | `before`, `after` | `diffMemgraphs` → `classifyCycle` |
+
+When the user invokes a prompt, the server fills the canonical playbook's argument templates with the user-provided values and returns a ready-to-execute brief. The agent then executes the steps — same tool calls as if the user had typed them out, just orchestrated.
+
+> **Both surfaces (Tools + Resources + Prompts) are independent — clients that only support Tools still get the full catalog via `classifyCycle`.** Resources and Prompts are pure-add UX improvements for clients that surface them.
+
+## 8. Where to go from here
 
 - **Add a new cycle pattern**: see the *Adding a cycle pattern to `classifyCycle`* section in [`README.md`](./README.md#contributing).
 - **Run a custom analysis from scratch**: every tool's input schema is documented via the MCP `tools/list` request. Hit the server with `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}` over stdio.

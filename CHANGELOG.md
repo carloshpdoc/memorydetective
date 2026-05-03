@@ -6,13 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-05-03
+
+Catalog grows from 27 to **33 patterns** (Swift 6 / Observation / SwiftData / NavigationStack era), the server adopts MCP **Resources** + **Prompts** beyond raw Tools, every classification now carries a `staticAnalysisHint` bridging to SwiftLint, and the `--version` drift bug from earlier is fixed.
+
+### Added
+
+- **6 new cycle patterns** in `classifyCycle`, sourced from Apple Developer Forums (#736110, #716804, #748042, #22795), Swift Forums (#64584, #77257), Donny Wals on the Swift 6.2 `Observations` API, and the Embrace WKWebView memory-leak writeup:
+  - `swiftui.observable-state-modal-leak` — `@Observable` model held as `@State` across modal presentation
+  - `swiftui.navigationpath-stored-in-viewmodel` — `NavigationPath` retains every element ever pushed (FB11643551, unfixed)
+  - `concurrency.async-sequence-on-self` — `for await ... in seq` pins self via the consuming Task; `[weak self]` does NOT help
+  - `concurrency.notificationcenter-async-observer-task` — special case of the above for `NotificationCenter.notifications(named:)`
+  - `swiftui.observations-closure-strong-self` — Swift 6.2 `Observations { }` closure retains self like `Combine.sink`
+  - `webkit.wkscriptmessagehandler-bridge` — handler ↔ webview ↔ contentController 3-link bridge cycle
+- **MCP Resources surface** — all 33 catalog patterns are now browsable as MCP resources at `memorydetective://patterns/{patternId}`. Each resource is a markdown body. Implemented in `src/runtime/resources.ts`. `resources/list` returns all 33; `resources/read` resolves any pattern URI to its markdown body.
+- **MCP Prompts surface** — 5 investigation playbooks exposed as MCP prompts (slash commands in clients that surface them, e.g. Claude Code): `/investigate-leak`, `/investigate-hangs`, `/investigate-jank`, `/investigate-launch`, `/verify-cycle-fix`. Each prompt fills the canonical playbook's argument templates with user-provided values and hands the agent a ready-to-execute brief. Implemented in `src/runtime/prompts.ts`.
+- **`staticAnalysisHint` field** on every `PatternMatch` — bridges runtime evidence to static analysis. Per-pattern entries point at the SwiftLint rule that would catch this at parse time (`weak_self`, `weak_delegate`) OR explicitly note the gap (with a link to e.g. SwiftLint #776 for `@escaping` retain cycles, or Swift Forums #64584 for AsyncSequence). The `swiftui.tag-index-projection` original-investigation pattern explicitly notes "no rule exists; this is a SwiftUI-internal observation issue, not a closure-capture issue." Implemented in `src/runtime/staticAnalysisHints.ts` with a 1:1-coverage test guard against `PATTERNS`.
+
 ### Fixed
 
-- `memorydetective --version` now reports the actually-installed version. Previously the CLI string was hardcoded (last bumped to `"1.4.0"` in v1.4.0; never bumped for `1.5.0`). The MCP server's `SERVER_VERSION` was even staler — it had been `"0.1.0-dev"` since the v1.0.0 release. Both surfaces now read from `package.json` at runtime via `src/version.ts`, so they can never drift again.
+- `memorydetective --version` now reports the actually-installed version. Previously the CLI string was hardcoded (last bumped to `"1.4.0"` in v1.4.0; never bumped for `1.5.0`). The MCP server's `SERVER_VERSION` was even staler — it had been `"0.1.0-dev"` since the v1.0.0 release. Both surfaces now read from `package.json` at runtime via `src/version.ts`, so they can never drift again. (Originally caught while dogfooding the new release script — bundled into 1.6.0 since 1.5.x didn't ship.)
 
 ### Changed
 
+- README: new "What's new in v1.6" callout. New "Resources (33)" and "Prompts (5)" subsections in the API section. The opening API line now reads "27 MCP tools + 33 Resources + 5 Prompts" instead of "27 MCP tools". Pattern-count and tool-description cells updated.
+- USAGE.md section 2 gains a v1.6 sub-table with the 6 new patterns + a paragraph explaining the new `staticAnalysisHint` field. New section 7 ("MCP Resources + Prompts") documents the catalog-as-resources and slash-command surfaces; the old section 7 is renumbered to 8.
 - Release process is now automated: `scripts/release.sh` orchestrates preflight → build/test → tag → npm publish → GitHub Release in one command. `.github/workflows/release.yml` re-validates on every `vX.Y.Z` tag push (build, tests, version match, CLI smoke). See the maintainer-facing checklist for the full process.
+- Test count: 152 → 183 (31 new — 14 for resources + prompts, 10 for the 6 new patterns + edge cases, 7 for the static-analysis-hint coverage guard).
+
+### Notes
+
+- No breaking changes — all additions are catalog entries or new optional fields. Old callers that ignore Resources/Prompts continue to work.
+- The `webkit.wkscriptmessagehandler-bridge` pattern is intentionally additive: it fires *alongside* the broader v1.4 `webkit.scriptmessage-handler-strong` pattern when all three signals (WKWebView + WKUserContentController + handler/bridge class) coexist. Different fix templates apply to each — the new specific one tells you to wrap in a `WeakScriptMessageHandler` proxy; the old broad one just notes that `WKUserContentController.add(_:name:)` retains strongly.
+- Catalog now covers 33 distinct cycle shapes across SwiftUI (incl. Swift 6 / `@Observable` / SwiftData / NavigationStack), Combine, Swift Concurrency (incl. AsyncSequence), UIKit (Timer / CADisplayLink / UIGestureRecognizer / KVO / URLSession / WebKit / DispatchSource), Core Animation, Core Data, the Coordinator pattern, RxSwift, and Realm.
 
 ## [1.5.0] — 2026-05-02
 
