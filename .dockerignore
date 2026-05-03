@@ -1,0 +1,28 @@
+node_modules
+dist
+.git
+.github
+.claude
+.DS_Store
+*.log
+*.tgz
+coverage
+.nyc_output
+
+# Tests + fixtures: not needed for the runtime image
+tests
+src/**/*.test.ts
+src/**/*.test.js
+
+# Local artifacts
+.env
+.env.*
+
+# Documentation: kept out of the image to shrink it. The npm tarball still
+# contains README/USAGE/CHANGELOG; this is just the Docker image.
+examples
+*.tape
+
+# Editor scratch
+.vscode
+.idea
