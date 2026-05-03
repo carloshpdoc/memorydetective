@@ -1,6 +1,6 @@
 # Usage guide
 
-Walkthrough of how `memorydetective` actually works in practice — what each tool returns, how fixes flow from diagnosis to your codebase, and the architecture decision behind splitting "diagnose" from "edit".
+Walkthrough of how `memorydetective` actually works in practice. What each tool returns, how fixes flow from diagnosis to your codebase, and the architecture decision behind splitting "diagnose" from "edit".
 
 For a quick API reference, see the [`README.md`](./README.md). For the full changelog, see [`CHANGELOG.md`](./CHANGELOG.md).
 
@@ -8,7 +8,7 @@ For a quick API reference, see the [`README.md`](./README.md). For the full chan
 
 ## 1. Three ways to use it
 
-### 1a. CLI mode — quickest way to see it work
+### 1a. CLI mode. Quickest way to see it work
 
 ```bash
 npm install -g memorydetective
@@ -62,16 +62,16 @@ You see one block per ROOT CYCLE, like:
                   swiftui.foreach-state-tap
 ```
 
-### 1b. JSON mode — for scripts and CI
+### 1b. JSON mode. For scripts and CI
 
 ```bash
 memorydetective analyze ~/Desktop/myapp.memgraph --json | jq .totals
 memorydetective classify ~/Desktop/myapp.memgraph --json | jq '.classified[0].primaryMatch'
 ```
 
-The JSON shape mirrors the MCP tool's response — same fields, no ANSI colours, ready to pipe into anything.
+The JSON shape mirrors the MCP tool's response. Same fields, no ANSI colours, ready to pipe into anything.
 
-### 1c. MCP mode — the actual product UX
+### 1c. MCP mode. The actual product UX
 
 This is what we built it for: an LLM agent (Claude Code, Claude Desktop, Cursor, Cline, Kiro, …) drives the investigation by chat.
 
@@ -99,12 +99,12 @@ Claude orchestrates the full flow (see [section 3](#3-how-fixes-actually-flow-fr
 `classifyCycle` ships with a built-in catalog of 34 common iOS retain-cycle patterns. Each pattern returns:
 
 - a textual `fixHint` (one-line plain-English direction)
-- a `staticAnalysisHint` (which SwiftLint rule complements the runtime evidence — or an explicit gap notice)
-- a `fixTemplate` (Swift before/after code snippet — new in v1.7) the agent can adapt directly
+- a `staticAnalysisHint` (which SwiftLint rule complements the runtime evidence. Or an explicit gap notice)
+- a `fixTemplate` (Swift before/after code snippet. New in v1.7) the agent can adapt directly
 
 Patterns are grouped below by the framework / source they target.
 
-### v1.0 core (8) — SwiftUI + Combine + Concurrency + Notifications
+### v1.0 core (8). SwiftUI + Combine + Concurrency + Notifications
 
 | Pattern ID | When it matches | Fix hint (summary) |
 |---|---|---|
@@ -117,7 +117,7 @@ Patterns are grouped below by the framework / source they target.
 | `concurrency.task-without-weak-self` | `_Concurrency.Task<…>` + `Closure context` | `Task { }` body strongly captures self for the lifetime of the task. `Task { [weak self] in guard let self else { return }; … }`. |
 | `notificationcenter.observer-strong` | `NotificationCenter` / `NSNotificationCenter` + `Closure context` | Block-form `addObserver(forName:...)` keeps the block alive in the center. Use `[weak self]` in the block, or store the returned `NSObjectProtocol` and call `removeObserver(_:)` in `deinit`. |
 
-### v1.4 expansion (16) — UIKit, Combine, Concurrency, SwiftUI, WebKit, RxSwift, Realm
+### v1.4 expansion (16). UIKit, Combine, Concurrency, SwiftUI, WebKit, RxSwift, Realm
 
 | Pattern ID | When it matches | Fix hint (summary) |
 |---|---|---|
@@ -138,7 +138,7 @@ Patterns are grouped below by the framework / source they target.
 | `rxswift.disposebag-self-cycle` | `RxSwift.DisposeBag` / `RxSwift.AnonymousDisposable` in chain | Subscription retains self if `[weak self]` is omitted or unbound method ref is passed. Always use `[weak self]`. |
 | `realm.notificationtoken-retained` | `RealmSwift.NotificationToken` / `RLMNotificationToken` | `Results.observe { ... }` retains the closure. `[weak self]` inside, `token?.invalidate()` in `deinit`. |
 
-### v1.5 catalog completion (3) — Core Animation + Core Data
+### v1.5 catalog completion (3). Core Animation + Core Data
 
 | Pattern ID | When it matches | Fix hint (summary) |
 |---|---|---|
@@ -146,7 +146,7 @@ Patterns are grouped below by the framework / source they target.
 | `coreanimation.layer-delegate-cycle` | Custom `CALayer` subclass (`CAShapeLayer` / `CAGradientLayer` / `CAEmitterLayer` / `CAMetalLayer` / etc.) in chain without `UIView` auto-pairing | Custom layer wired to non-UIView delegate leaks. Wrap in `WeakLayerDelegate` or clear `layer.delegate = nil` in `deinit`. |
 | `coredata.fetchedresultscontroller-delegate` | `NSFetchedResultsController` / `_PFFetchedResultsController` in chain | Apple's historical strong-delegate quirk via the change-tracker. `frc.delegate = nil` in `viewWillDisappear` / `deinit`. |
 
-### v1.6 catalog expansion (6) — Swift 6 / Observation / SwiftData / NavigationStack era
+### v1.6 catalog expansion (6). Swift 6 / Observation / SwiftData / NavigationStack era
 
 Sourced from Apple Developer Forums (#736110, #716804, #748042), Swift Forums (#64584, #77257), Donny Wals on the Swift 6.2 `Observations` API, and the Embrace WKWebView memory-leak writeup.
 
@@ -154,23 +154,23 @@ Sourced from Apple Developer Forums (#736110, #716804, #748042), Swift Forums (#
 |---|---|---|
 | `swiftui.observable-state-modal-leak` | `_$ObservationRegistrar` + sheet/presentation host in chain | `@Observable` model passed as `@State` to a modal leaks. Move the model to `@StateObject` on the parent and pass via `@Bindable`, or use `.sheet(item:)` with a value type. |
 | `swiftui.navigationpath-stored-in-viewmodel` | `NavigationPath` / `NavigationStackStore` / `AnyHashableStorageBase` in chain | NavigationPath retains every element ever pushed (FB11643551, unfixed). Keep it `@State` local to the view, or reset with `path = NavigationPath()` after `popToRoot`. |
-| `concurrency.async-sequence-on-self` | `AsyncSequence` / `AsyncIteratorProtocol` + `Task<...>` in chain | `for await ... in seq { use(self) }` pins self via the iteration context — `[weak self]` does NOT help. Capture only the values needed before the loop, or `task.cancel()` in `deinit`. |
-| `concurrency.notificationcenter-async-observer-task` | `NotificationCenter.Notifications` (the `AsyncSequence` form) + `Task<...>` | Special case of the above — `for await _ in NotificationCenter.default.notifications(named:)` never terminates. Same fix discipline. |
+| `concurrency.async-sequence-on-self` | `AsyncSequence` / `AsyncIteratorProtocol` + `Task<...>` in chain | `for await ... in seq { use(self) }` pins self via the iteration context. `[weak self]` does NOT help. Capture only the values needed before the loop, or `task.cancel()` in `deinit`. |
+| `concurrency.notificationcenter-async-observer-task` | `NotificationCenter.Notifications` (the `AsyncSequence` form) + `Task<...>` | Special case of the above. `for await _ in NotificationCenter.default.notifications(named:)` never terminates. Same fix discipline. |
 | `swiftui.observations-closure-strong-self` | `Observations` (the Swift 6.2 API, NOT `ObservationRegistrar`) + `Closure context` | The new non-SwiftUI `Observations { }` closure retains self like `Combine.sink`. Use `[weak self]` inside the closure. |
 | `webkit.wkscriptmessagehandler-bridge` | `WKWebView` + `WKUserContentController` + `WKScriptMessageHandler` (or `*Bridge`/`*Handler` class) all in chain | The 3-link bridge cycle: bridge → webView → contentController → bridge. Wrap the handler in `WeakScriptMessageHandler` proxy, or `removeScriptMessageHandler(forName:)` for every name added. Fires alongside the broader v1.4 `webkit.scriptmessage-handler-strong` pattern when the full bridge shape is present. |
 
-### v1.7 catalog (1) — SwiftData + Actor
+### v1.7 catalog (1). SwiftData + Actor
 
 | Pattern ID | When it matches | Fix hint (summary) |
 |---|---|---|
 | `swiftdata.modelcontext-actor-cycle` | `ModelContext` + `DefaultSerialModelExecutor` (or `ModelExecutor`) + `Actor` in chain | Apple-documented quirk on iOS 17 (FB13844786, fixed in iOS 18 beta 1). Prefer the `@ModelActor` macro over hand-rolled executors; or hold `ModelContext` weakly inside a custom executor and re-resolve per operation. |
 
-**Confidence tiers**: each pattern returns `high`, `medium`, or `low` based on how many specific signals match. If multiple patterns fire on the same cycle, all matches are returned — the highest-confidence one is `primaryMatch`, the rest are in `allMatches`.
+**Confidence tiers**: each pattern returns `high`, `medium`, or `low` based on how many specific signals match. If multiple patterns fire on the same cycle, all matches are returned. The highest-confidence one is `primaryMatch`, the rest are in `allMatches`.
 
 **Static analysis bridge (v1.6+)**: every classified cycle now carries a `staticAnalysisHint` field with three sub-fields:
-- `rule` — the SwiftLint rule that would have caught this at parse time (`weak_self`, `weak_delegate`, etc.), or `null` when no rule exists
-- `url` — link to the rule docs OR to the open issue tracking the gap (e.g. SwiftLint #776 for `@escaping` retain cycles)
-- `explanation` — plain-English description of the static-vs-runtime relationship
+- `rule`: The SwiftLint rule that would have caught this at parse time (`weak_self`, `weak_delegate`, etc.), or `null` when no rule exists
+- `url`: Link to the rule docs OR to the open issue tracking the gap (e.g. SwiftLint #776 for `@escaping` retain cycles)
+- `explanation`: Plain-English description of the static-vs-runtime relationship
 
 Reinforces the differentiator: **memorydetective sees the runtime evidence linters miss**. Examples:
 - `combine.sink-store-self-capture` → `weak_self` (SwiftLint catches the closure form)
@@ -196,7 +196,7 @@ Where `staticAnalysisHint` says **which** linter rule complements this, `fixTemp
 
 ## 3. How fixes actually flow from diagnosis to edit
 
-`memorydetective` covers the diagnose side **and the source-bridging side**. It tells you **what** is wrong, **where in the cycle**, **what type of fix** is needed, **where the relevant types live in your project** (via Swift LSP integration), and **every callsite that references them**. It does not edit your code — that final step still belongs to your LLM agent.
+`memorydetective` covers the diagnose side **and the source-bridging side**. It tells you **what** is wrong, **where in the cycle**, **what type of fix** is needed, **where the relevant types live in your project** (via Swift LSP integration), and **every callsite that references them**. It does not edit your code. That final step still belongs to your LLM agent.
 
 So the workflow has two halves:
 
@@ -207,7 +207,7 @@ So the workflow has two halves:
 | **Decide the actual edit** | | ✅ The agent reads the surrounding code, picks the right capture-list pattern, writes the diff |
 | **Apply the edit** | | ✅ The agent's `Edit`/`MultiEdit` tools write to the user's file |
 
-The split between "locate" (us) and "edit" (the agent) is intentional. Locating is a deterministic SourceKit-LSP query; editing requires understanding the user's surrounding code style, naming conventions, and intent — that's the LLM's strength. We give the agent every piece of structured information it needs to make the edit, and step back at the file-write boundary.
+The split between "locate" (us) and "edit" (the agent) is intentional. Locating is a deterministic SourceKit-LSP query; editing requires understanding the user's surrounding code style, naming conventions, and intent. That's the LLM's strength. We give the agent every piece of structured information it needs to make the edit, and step back at the file-write boundary.
 
 ### Concrete end-to-end example
 
@@ -226,13 +226,13 @@ What Claude does, step by step:
    - Receives: `swiftui.tag-index-projection` (high confidence) + fix hint pointing at `.tag()` modifier capturing `self`.
 
 3. **Calls `reachableFromCycle({ rootClassName: "DetailViewModel" })`**
-   - Confirms 4 `DetailViewModel` instances and ~1100 `NSURLSessionConfiguration`s reachable from each — the VM is the culprit pinning the network stack as collateral, not the other way around.
+   - Confirms 4 `DetailViewModel` instances and ~1100 `NSURLSessionConfiguration`s reachable from each. The VM is the culprit pinning the network stack as collateral, not the other way around.
 
 4. **Calls `swiftSearchPattern({ pattern: "\\.tag\\(", filePath: "..." })` across views**
    - Surfaces 1 match in `MyApp/Views/MediaCarousel.swift:142`.
 
 5. **Calls `swiftGetSymbolDefinition({ symbolName: "DetailViewModel", projectRoot: "~/Development/myapp/", candidatePaths: ["MyApp/ViewModels/"] })`**
-   - Returns `MyApp/ViewModels/DetailViewModel.swift:18` — `class DetailViewModel: ObservableObject`.
+   - Returns `MyApp/ViewModels/DetailViewModel.swift:18`. `class DetailViewModel: ObservableObject`.
 
 6. **Calls `swiftFindSymbolReferences({ symbolName: "DetailViewModel", filePath: "..." })`**
    - Lists 7 callsites across the codebase. Helps the agent gauge fix blast radius.
@@ -248,7 +248,7 @@ What Claude does, step by step:
    >     self.viewModel.handlePhotoTap(at: index)
    > }
    >
-   > // after — static helper + weak captures
+   > // after. Static helper + weak captures
    > onImageSliderTap: { [weak vm = _viewModel.wrappedValue,
    >                      weak coord = self.coordinator] index in
    >     Self.handlePhotoTap(index: index, viewModel: vm, coordinator: coord)
@@ -269,7 +269,7 @@ What Claude does, step by step:
 
    > **You:** Did the fix work? Compare `~/Desktop/before.memgraph` to `~/Desktop/after.memgraph`.
 
-   Claude calls `diffMemgraphs` — instance counts dropped, the `swiftui.tag-index-projection` cycle is gone from `cycles.persisted`, present in `cycles.goneFromBefore`.
+   Claude calls `diffMemgraphs`. Instance counts dropped, the `swiftui.tag-index-projection` cycle is gone from `cycles.persisted`, present in `cycles.goneFromBefore`.
 
 ### Why this is better than "memorydetective generates the diff"
 
@@ -279,7 +279,7 @@ If `memorydetective` tried to generate a code patch, it would have to:
 - Track the actual variable names and types in scope
 - Match surrounding code style
 
-That's exactly what an LLM agent already does — and does well. Splitting the responsibility keeps each side simple. `memorydetective` knows **iOS perf**; the agent knows **your codebase**. They compose.
+That's exactly what an LLM agent already does. And does well. Splitting the responsibility keeps each side simple. `memorydetective` knows **iOS perf**; the agent knows **your codebase**. They compose.
 
 ---
 
@@ -289,24 +289,24 @@ Once you have the diagnosis, here are useful follow-up prompts you can paste int
 
 | Prompt | What Claude calls |
 |---|---|
-| "I want to investigate a memgraph leak — what's the canonical sequence?" | `getInvestigationPlaybook({ kind: "memgraph-leak" })` — returns the 6-step pipeline with `argsTemplate` for each tool. |
+| "I want to investigate a memgraph leak. What's the canonical sequence?" | `getInvestigationPlaybook({ kind: "memgraph-leak" })`. Returns the 6-step pipeline with `argsTemplate` for each tool. |
 | "How many `DetailViewModel` instances are leaking?" | `countAlive(path, className: "DetailViewModel")` |
 | "How many `NSURLSessionConfiguration`s are *inside* the cycle rooted at `DetailViewModel`?" | `reachableFromCycle(path, rootClassName: "DetailViewModel", className: "NSURLSessionConfiguration")` |
 | "Show the retain chain that keeps `DetailViewModel` alive." | `findRetainers(path, className: "DetailViewModel")` |
-| "Compare `~/Desktop/before.memgraph` to `~/Desktop/after.memgraph` — did the leak go away?" | `diffMemgraphs(before, after)` |
-| "Did my fix actually resolve the `swiftui.tag-index-projection` cycle?" | `verifyFix(before, after, expectedPatternId: "swiftui.tag-index-projection")` — returns PASS/PARTIAL/FAIL |
+| "Compare `~/Desktop/before.memgraph` to `~/Desktop/after.memgraph`. Did the leak go away?" | `diffMemgraphs(before, after)` |
+| "Did my fix actually resolve the `swiftui.tag-index-projection` cycle?" | `verifyFix(before, after, expectedPatternId: "swiftui.tag-index-projection")`. Returns PASS/PARTIAL/FAIL |
 | "Render the cycle as a Mermaid graph for the PR description." | `renderCycleGraph(path, format: "mermaid")` |
 | "Profile this app on my iPhone for 90 seconds and tell me about hangs." | `listTraceDevices` → `recordTimeProfile` → `analyzeHangs` |
 | "Pull the last 5 minutes of `error`-level logs from `MyApp`." | `logShow(last: "5m", process: "MyApp", level: "default")` |
 | "Run my XCUITest with leak detection." | `detectLeaksInXCUITest(workspace, scheme, testIdentifier, …)` |
-| **Source bridging — combine with the memory tools above:** | |
+| **Source bridging. Combine with the memory tools above:** | |
 | "Where is `DetailViewModel` declared in this project?" | `swiftGetSymbolDefinition(symbolName, candidatePaths)` |
 | "Find every reference to `DetailViewModel` across the codebase." | `swiftFindSymbolReferences(symbolName, filePath)` |
 | "What types live in `MediaCarousel.swift`?" | `swiftGetSymbolsOverview(filePath)` |
 | "What's the type at this position in this file?" | `swiftGetHoverInfo(filePath, line, character)` |
 | "Search for `[weak self]` captures in this file." | `swiftSearchPattern(filePath, pattern: "\\[weak self\\]")` |
 
-The agent decides which tool to call based on your prompt — you don't need to remember the tool names.
+The agent decides which tool to call based on your prompt. You don't need to remember the tool names.
 
 ---
 
@@ -333,11 +333,11 @@ Known limit. `xcrun xctrace export` of the `time-profile` schema crashes on heav
 
 1. Open the trace once in Instruments.app (forces symbolication), then close it. Re-run `analyzeTimeProfile`.
 2. Re-record with a shorter `--time-limit` (try 30 s instead of 90 s).
-3. For hang analysis specifically, use `analyzeHangs` instead — it parses a different (lighter) schema that doesn't crash.
+3. For hang analysis specifically, use `analyzeHangs` instead. It parses a different (lighter) schema that doesn't crash.
 
 ### `captureMemgraph` fails on a physical iOS device
 
-By design. `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device goes through Xcode's debugger over USB — different mechanism, no public CLI equivalent. Use Xcode's Memory Graph button + File → Export Memory Graph for physical devices.
+By design. `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device goes through Xcode's debugger over USB. Different mechanism, no public CLI equivalent. Use Xcode's Memory Graph button + File → Export Memory Graph for physical devices.
 
 ### Tests pass locally but fail in CI
 
@@ -345,7 +345,7 @@ The stress test has a wallclock budget that's tighter on slower runners. If you 
 
 ### `detectLeaksInXCUITest` says "after-capture failed"
 
-The app process exited before `leaks --outputGraph` could attach. Configure your XCUITest to keep the app alive at end-of-test (e.g. `XCTAssertTrue(true); _ = XCTWaiter.wait(for: [...], timeout: 1.0)`), or use a longer simulator boot. This tool is **experimental** in v1.0 — feedback welcome.
+The app process exited before `leaks --outputGraph` could attach. Configure your XCUITest to keep the app alive at end-of-test (e.g. `XCTAssertTrue(true); _ = XCTWaiter.wait(for: [...], timeout: 1.0)`), or use a longer simulator boot. This tool is **experimental** in v1.0. Feedback welcome.
 
 ---
 
@@ -353,7 +353,7 @@ The app process exited before `leaks --outputGraph` could attach. Configure your
 
 Discovery is data, not inference. As of v1.3, the tools that matter most return a `suggestedNextCalls` field with pre-populated arguments and a one-sentence rationale per entry. The orchestrating agent can chain calls without re-reasoning over the result.
 
-### `suggestedNextCalls` — example from `classifyCycle`
+### `suggestedNextCalls`: example from `classifyCycle`
 
 ```jsonc
 {
@@ -383,7 +383,7 @@ Discovery is data, not inference. As of v1.3, the tools that matter most return 
 
 The agent reads `suggestedNextCalls`, fills in the `<...>` placeholders from project context, and chains. No re-reasoning required.
 
-### `getInvestigationPlaybook` — start here for a fresh investigation
+### `getInvestigationPlaybook`: start here for a fresh investigation
 
 For agents that haven't seen the project before, ask for the canonical pipeline first:
 
@@ -442,9 +442,9 @@ The tag is leading text in the MCP description, so it shows up in any tools/list
 
 Since v1.6, memorydetective surfaces two MCP-spec features beyond raw Tools.
 
-### Resources — browsable cycle-pattern catalog
+### Resources: browsable cycle-pattern catalog
 
-Each of the 33 catalog patterns is exposed as a read-only MCP resource at `memorydetective://patterns/{patternId}`. The body is markdown — the pattern name, the fix hint, and a footer pointing at how it composes with `classifyCycle`'s `primaryMatch`.
+Each of the 33 catalog patterns is exposed as a read-only MCP resource at `memorydetective://patterns/{patternId}`. The body is markdown. The pattern name, the fix hint, and a footer pointing at how it composes with `classifyCycle`'s `primaryMatch`.
 
 ```jsonc
 // resources/list response (excerpt)
@@ -469,7 +469,7 @@ Each of the 33 catalog patterns is exposed as a read-only MCP resource at `memor
 
 **Why this matters:** an agent that needs to ask "do you cover X?" can browse the resource list cheaply (no tool call). A UI-aware client can render the catalog as a sidebar or completion source.
 
-### Prompts — investigation playbooks as slash commands
+### Prompts: investigation playbooks as slash commands
 
 Five prompts ship, one per investigation kind:
 
@@ -481,12 +481,12 @@ Five prompts ship, one per investigation kind:
 | `investigate-launch` | `/investigate-launch` | `tracePath` | `recordTimeProfile` (App Launch template) → `analyzeAppLaunch` → `swiftSearchPattern` |
 | `verify-cycle-fix` | `/verify-cycle-fix` | `before`, `after` | `diffMemgraphs` → `classifyCycle` |
 
-When the user invokes a prompt, the server fills the canonical playbook's argument templates with the user-provided values and returns a ready-to-execute brief. The agent then executes the steps — same tool calls as if the user had typed them out, just orchestrated.
+When the user invokes a prompt, the server fills the canonical playbook's argument templates with the user-provided values and returns a ready-to-execute brief. The agent then executes the steps. Same tool calls as if the user had typed them out, just orchestrated.
 
-> **Both surfaces (Tools + Resources + Prompts) are independent — clients that only support Tools still get the full catalog via `classifyCycle`.** Resources and Prompts are pure-add UX improvements for clients that surface them.
+> **Both surfaces (Tools + Resources + Prompts) are independent. Clients that only support Tools still get the full catalog via `classifyCycle`.** Resources and Prompts are pure-add UX improvements for clients that surface them.
 
 ## 8. Where to go from here
 
 - **Add a new cycle pattern**: see the *Adding a cycle pattern to `classifyCycle`* section in [`README.md`](./README.md#contributing).
 - **Run a custom analysis from scratch**: every tool's input schema is documented via the MCP `tools/list` request. Hit the server with `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}` over stdio.
-- **Open an issue**: https://github.com/carloshpdoc/memorydetective/issues — bug reports, feature requests, and pattern contributions are all welcome.
+- **Open an issue**: https://github.com/carloshpdoc/memorydetective/issues. Bug reports, feature requests, and pattern contributions are all welcome.
