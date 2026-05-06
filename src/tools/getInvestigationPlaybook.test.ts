@@ -48,4 +48,18 @@ describe("getInvestigationPlaybook", () => {
     expect(playbook.steps[0].tool).toBe("diffMemgraphs");
     expect(playbook.steps.at(-1)?.tool).toBe("classifyCycle");
   });
+
+  it("memgraph-leak playbook documents the minimal-corpse fallback", async () => {
+    const { playbook } = await getInvestigationPlaybook({
+      kind: "memgraph-leak",
+    });
+    expect(playbook.troubleshooting).toBeDefined();
+    const minimalCorpse = playbook.troubleshooting?.find(
+      (t) => t.issueId === "minimal-corpse",
+    );
+    expect(minimalCorpse).toBeDefined();
+    expect(minimalCorpse?.tool).toBe("captureMemgraph");
+    expect(minimalCorpse?.recovery.length).toBeGreaterThan(0);
+    expect(minimalCorpse?.recovery.some((r) => /Xcode/.test(r))).toBe(true);
+  });
 });

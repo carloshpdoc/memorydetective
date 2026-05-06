@@ -5,7 +5,7 @@ import {
   buildXctraceArgs,
   recordTimeProfileSchema,
 } from "./recordTimeProfile.js";
-import { captureMemgraphSchema } from "./captureMemgraph.js";
+import { captureMemgraphSchema, classifyLeaksFailure } from "./captureMemgraph.js";
 
 describe("parseDeviceListing", () => {
   it("groups devices, simulators, and offline devices", () => {
@@ -167,5 +167,54 @@ describe("captureMemgraph schema validation", () => {
       output: "/tmp/foo.memgraph",
     });
     expect(r.success).toBe(true);
+  });
+});
+
+describe("classifyLeaksFailure", () => {
+  it("returns null on success exit codes (0 = clean, 1 = leaks found)", () => {
+    expect(
+      classifyLeaksFailure({ code: 0, stdout: "", stderr: "" }),
+    ).toBeNull();
+    expect(
+      classifyLeaksFailure({ code: 1, stdout: "", stderr: "" }),
+    ).toBeNull();
+  });
+
+  it("flags minimal-corpse on macOS 26.x DYLD info failures", () => {
+    const stderr =
+      "leaks: Failed to get DYLD info for task from parent of minimal corpse";
+    expect(classifyLeaksFailure({ code: 2, stdout: "", stderr })).toBe(
+      "minimal-corpse",
+    );
+  });
+
+  it("flags minimal-corpse on the corpse-task variant", () => {
+    const stderr = "task_create_corpse failed: 0x5 (KERN_FAILURE)";
+    expect(classifyLeaksFailure({ code: 2, stdout: "", stderr })).toBe(
+      "minimal-corpse",
+    );
+  });
+
+  it("flags permission-denied on task_for_pid failures", () => {
+    const stderr = "task_for_pid(...) failed: insufficient privileges";
+    expect(classifyLeaksFailure({ code: 2, stdout: "", stderr })).toBe(
+      "permission-denied",
+    );
+  });
+
+  it("flags leaks-not-found when shell exits 127", () => {
+    expect(
+      classifyLeaksFailure({
+        code: 127,
+        stdout: "",
+        stderr: "leaks: command not found",
+      }),
+    ).toBe("leaks-not-found");
+  });
+
+  it("falls back to transient on unrecognized non-zero exits", () => {
+    expect(
+      classifyLeaksFailure({ code: 2, stdout: "", stderr: "weird error" }),
+    ).toBe("transient");
   });
 });

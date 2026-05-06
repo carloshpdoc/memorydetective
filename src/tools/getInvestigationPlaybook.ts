@@ -40,12 +40,28 @@ export interface PlaybookStep {
   resultGuidance?: string;
 }
 
+export interface PlaybookTroubleshooting {
+  /** Tool whose failure this entry addresses. */
+  tool: string;
+  /**
+   * Stable identifier matching `workaroundNotice.issue` when the underlying
+   * tool emits one. Lets the LLM agent branch deterministically.
+   */
+  issueId?: string;
+  /** One-line description of the symptom that triggers this entry. */
+  trigger: string;
+  /** Ordered recovery steps the agent can take. */
+  recovery: string[];
+}
+
 export interface Playbook {
   kind: PlaybookKind;
   summary: string;
   steps: PlaybookStep[];
   /** Pointers to alternative playbooks the agent might want next. */
   seeAlso?: PlaybookKind[];
+  /** Known failure modes for tools used in this playbook + recovery paths. */
+  troubleshooting?: PlaybookTroubleshooting[];
 }
 
 const PLAYBOOKS: Record<PlaybookKind, Playbook> = {
@@ -107,7 +123,7 @@ const PLAYBOOKS: Record<PlaybookKind, Playbook> = {
         step: 6,
         tool: "swiftFindSymbolReferences",
         purpose:
-          "List every callsite — useful to compare capture-list patterns across them and detect inconsistencies.",
+          "List every callsite, useful to compare capture-list patterns across them and detect inconsistencies.",
         argsTemplate: {
           symbolName: "<class from step 3>",
           filePath: "<from step 5 result>",
@@ -115,6 +131,31 @@ const PLAYBOOKS: Record<PlaybookKind, Playbook> = {
       },
     ],
     seeAlso: ["verify-fix"],
+    troubleshooting: [
+      {
+        tool: "captureMemgraph",
+        issueId: "minimal-corpse",
+        trigger:
+          "leaks --outputGraph aborts with 'Failed to get DYLD info for task' on macOS 26.x. Known regression in Apple's leaks tooling.",
+        recovery: [
+          "Read `workaroundNotice.fallbacks` from the captureMemgraph result for ordered options.",
+          "Open Xcode > Debug > View Memory Graph Hierarchy on the running process, then File > Export Memory Graph to save a .memgraph manually. Pass that path to analyzeMemgraph.",
+          "Fall back to recordTimeProfile (template Allocations) + analyzeAllocations to identify top live classes. This is not full cycle detection but reveals leak suspects.",
+          "Once Phase 2 ships, relaunch the app via bootAndLaunchForLeakInvestigation with MallocStackLogging=1 and retry capture.",
+        ],
+      },
+      {
+        tool: "captureMemgraph",
+        issueId: "permission-denied",
+        trigger:
+          "leaks cannot attach to the target process due to insufficient privileges (task_for_pid failure).",
+        recovery: [
+          "Confirm the target was built with a debuggable entitlement (DEBUG, not Release).",
+          "Grant Developer Tools access to the parent shell in System Settings > Privacy & Security.",
+          "Use Xcode's Memory Graph button while the app is attached to the debugger.",
+        ],
+      },
+    ],
   },
 
   "perf-hangs": {
