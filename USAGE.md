@@ -299,6 +299,10 @@ Once you have the diagnosis, here are useful follow-up prompts you can paste int
 | "Profile this app on my iPhone for 90 seconds and tell me about hangs." | `listTraceDevices` → `recordTimeProfile` → `analyzeHangs` |
 | "Pull the last 5 minutes of `error`-level logs from `MyApp`." | `logShow(last: "5m", process: "MyApp", level: "default")` |
 | "Run my XCUITest with leak detection." | `detectLeaksInXCUITest(workspace, scheme, testIdentifier, …)` |
+| **Verify-fix orchestration (v1.8). For the macOS 26.x `leaks` regression and deterministic before/after snapshots:** | |
+| "Build, boot, and launch `MyApp` ready for leak investigation." | `bootAndLaunchForLeakInvestigation({ workspace, scheme, simulator: { name: "iPhone 15" } })`. Returns host PID + UDID + bundle id with `MallocStackLogging=1` already applied. |
+| "Reproduce the carousel leak: tap Explore, swipe, then back, repeat 5 times." | `replayScenario({ simulatorUDID, actions: [{ type: "tap", label: "Explore" }, { type: "swipe", from: [350, 400], to: [50, 400] }, { type: "tap", label: "Back" }], repeat: 5 })` |
+| "Snapshot before / after the fix into `~/Desktop/snaps/`." | `captureScenarioState({ simulatorUDID, pid, outputDir: "~/Desktop/snaps/", label: "before" })` then ship the fix and call again with `label: "after"`. Then `diffMemgraphs(before.memgraph, after.memgraph)`. |
 | **Source bridging. Combine with the memory tools above:** | |
 | "Where is `DetailViewModel` declared in this project?" | `swiftGetSymbolDefinition(symbolName, candidatePaths)` |
 | "Find every reference to `DetailViewModel` across the codebase." | `swiftFindSymbolReferences(symbolName, filePath)` |
@@ -338,6 +342,48 @@ Known limit. `xcrun xctrace export` of the `time-profile` schema crashes on heav
 ### `captureMemgraph` fails on a physical iOS device
 
 By design. `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device goes through Xcode's debugger over USB. Different mechanism, no public CLI equivalent. Use Xcode's Memory Graph button + File → Export Memory Graph for physical devices.
+
+### `captureMemgraph` returns `workaroundNotice: { issue: "minimal-corpse" }` (macOS 26.x)
+
+`leaks --outputGraph` regressed on macOS 26.x and aborts with `Failed to get DYLD info for task` when the target process was not launched with `MallocStackLogging=1` in its environment. This is the new structured failure shape v1.8 surfaces:
+
+```jsonc
+{
+  "ok": false,
+  "pid": 49581,
+  "workaroundNotice": {
+    "issue": "minimal-corpse",
+    "message": "leaks --outputGraph could not introspect the target process...",
+    "fallbacks": [
+      "Relaunch the app with MallocStackLogging=1 (use bootAndLaunchForLeakInvestigation).",
+      "Open Xcode > Debug > View Memory Graph Hierarchy + File > Export Memory Graph.",
+      "Record an Allocations trace via recordTimeProfile + analyzeAllocations."
+    ]
+  },
+  "suggestedNextCalls": [
+    { "tool": "recordTimeProfile", "args": { "template": "Allocations", ... } },
+    { "tool": "analyzeAllocations", "args": { ... } }
+  ]
+}
+```
+
+Recovery options in order of preference:
+
+1. **Use `bootAndLaunchForLeakInvestigation`**. Single call that builds, boots, installs, and launches with the right env vars in one shot. Returns the host PID ready for `captureMemgraph`. This is the canonical fix.
+2. **Xcode manual export.** With the app attached to Xcode debugger: Debug > View Memory Graph Hierarchy, then File > Export Memory Graph. Pass the resulting `.memgraph` to `analyzeMemgraph`.
+3. **Allocations fallback.** Follow `suggestedNextCalls` to record an `Allocations` trace and inspect with `analyzeAllocations`. Not full cycle detection but reveals top live classes.
+
+The `getInvestigationPlaybook({ kind: "memgraph-leak" })` response now carries a `troubleshooting` field with these recovery paths inline so an LLM agent can branch deterministically.
+
+### `replayScenario` returns `workaroundNotice: { issue: "axe-not-found" }`
+
+The `axe` CLI is not on your `$PATH`. Install with:
+
+```bash
+brew install cameroncooke/axe/axe
+```
+
+`axe` is a soft dependency. Only `replayScenario` and the `uiTree` sub-capture of `captureScenarioState` need it. Other tools work without it.
 
 ### Tests pass locally but fail in CI
 

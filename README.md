@@ -17,9 +17,9 @@
 - **MCP-native.** Plugs into Claude Code, Claude Desktop, Cursor, Cline, and any other MCP client. The agent drives the full investigate → classify → suggest-fix loop without you opening Instruments.
 - **Honest about its limits.** No mocked outputs, no over-promises. Hangs analysis works clean from `xctrace`; sample-level Time Profile is parsed when `xctrace` symbolicates the trace and returns a structured workaround notice when it can't (the underlying `xctrace` SIGSEGV on heavy unsymbolicated traces is an Apple-side limitation we surface explicitly). Memory Graph capture works on Mac apps and iOS simulator; physical iOS devices still need Xcode.
 
-> **What's new in v1.7** (2026-05-03): catalog grew from 33 to **34 cycle patterns** (`swiftdata.modelcontext-actor-cycle` for the SwiftData `@Actor` pattern), every classification now carries a **`fixTemplate` field** with concrete Swift before/after snippets the agent can adapt directly, and a new **`compareTracesByPattern` tool** does for `.trace` bundles what `verifyFix` does for memgraphs. PASS/PARTIAL/FAIL verdicts on hangs / animation-hitches / app-launch regressions. 27 → 28 MCP tools.
+> **What's new in v1.8** (2026-05-06): `leaks --outputGraph` regressed on macOS 26.x and aborts unless the target was launched with `MallocStackLogging=1`. This release fixes that end to end. `captureMemgraph` now emits a structured `workaroundNotice` when the regression hits, the new **`bootAndLaunchForLeakInvestigation`** tool absorbs build + boot + install + launch with the right env vars so capture works on the first try, and **`replayScenario`** + **`captureScenarioState`** close the verify-fix loop with deterministic before/after snapshots (memgraph + screenshot + UI tree, all labeled). 28 → 31 MCP tools, 213 → 287 tests.
 >
-> **Also in v1.6** (same day): catalog 27 → 33, MCP Resources + Prompts surface, and the original `staticAnalysisHint` field. Full notes in [CHANGELOG](./CHANGELOG.md).
+> **Also recent**: v1.7 (2026-05-03) added the 34th cycle pattern + `fixTemplate` snippets + `compareTracesByPattern` for trace-side CI gating. v1.6 (same day) added MCP Resources + Prompts. Full notes in [CHANGELOG](./CHANGELOG.md).
 
 ## Quickstart
 
@@ -68,6 +68,28 @@ memorydetective classify  ~/Desktop/myapp.memgraph
 >
 > **Claude:** *(calls `diffMemgraphs` → `countAlive`)*
 > `DetailViewModel`: **12 → 0** (delta `-12`). The `swiftui.tag-index-projection` cycle is gone. Total leak count fell from 60,436 to 55,576 (−4,860). Three other ROOT CYCLEs persist. They're SwiftUI internals, not your code.
+
+### Self-contained verify-fix loop (v1.8)
+
+When `leaks --outputGraph` fails on macOS 26.x (`Failed to get DYLD info for task`), the cause is usually that the app was not launched with `MallocStackLogging=1`. The new orchestration tools handle this end to end without you wiring up xcodebuild + simctl + axe yourself.
+
+> **You:** Reproduce the leak in `MyApp` for me. Build, launch with the right env vars, repeat the photo carousel flow 5 times to amplify it, capture before, then I'll ship the fix and you capture after.
+>
+> **Claude:** *(calls `bootAndLaunchForLeakInvestigation`)*
+> Built + booted iPhone 15 (UDID `ABCD-...`). Launched `MyApp` (PID `49581`) with `MallocStackLogging=1`. Bundle id `com.example.MyApp`.
+>
+> *(calls `replayScenario` with 5 taps on the carousel + back-button cycle, repeat 5)*
+> Executed 25 actions in 12.3s. No failures.
+>
+> *(calls `captureScenarioState({label:"before"})`)*
+> Wrote `before.memgraph` (63,201 leaks), `before.png`, `before.ui.json`. `MallocStackLogging` active, no workaroundNotice.
+>
+> *(you ship the fix and rebuild)*
+>
+> *(calls `bootAndLaunchForLeakInvestigation` + replay + `captureScenarioState({label:"after"})`)*
+>
+> *(calls `diffMemgraphs` → `verifyFix`)*
+> `DetailViewModel`: **15 → 0**. `swiftui.tag-index-projection` PASS. Bytes freed: 28.4 MB.
 
 ### Find the slow path on a real device
 
@@ -260,7 +282,7 @@ Copilot's MCP integration moves fast. If this snippet is stale, see the [VS Code
 
 ## API
 
-**28 MCP tools + 34 Resources + 5 Prompts**, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[meta]`) so related tools are visible at a glance.
+**31 MCP tools + 34 Resources + 5 Prompts**, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.build]`, `[mg.scenario]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[meta]`) so related tools are visible at a glance.
 
 Many tools include a `suggestedNextCalls` field in their response. A typed list of `{ tool, args, why }` entries pre-populated from the current result, so the orchestrating LLM can chain calls without re-reasoning. Start with `getInvestigationPlaybook(kind)` for the canonical sequence. Or just type `/investigate-leak` (one of the [Prompts](#prompts-5)) in any client that exposes MCP slash commands.
 
@@ -295,8 +317,18 @@ The cycle classifier ships **34 named antipatterns** spanning SwiftUI (including
 | Tool | What | Sim | Device |
 |---|---|---|---|
 | `recordTimeProfile` | Wrap `xcrun xctrace record --template "Time Profiler" --attach ... --time-limit Ns --output ...`. | ✅ | ✅ |
-| `captureMemgraph` | Wrap `leaks --outputGraph <path> <pid>`. Resolves `appName → pid` via `pgrep -x`. | ✅ | ❌. Use Xcode |
+| `captureMemgraph` | Wrap `leaks --outputGraph <path> <pid>`. Resolves `appName → pid` via `pgrep -x`. Returns a structured `workaroundNotice` on the macOS 26.x `Failed to get DYLD info for task` regression with stable issue ids (`minimal-corpse`, `permission-denied`, `leaks-not-found`, `transient`) and a fallback path to `recordTimeProfile` (Allocations) + `analyzeAllocations`. | ✅ | ❌. Use Xcode |
 | `logStream` | Wrap `log stream --style compact` for a bounded duration (≤ 60 s). Returns parsed entries collected during the window. | n/a | n/a |
+
+### Verify-fix orchestration (3, v1.8)
+
+These three tools combine into a single deterministic verify-fix loop: launch the app with `MallocStackLogging=1` so leaks works, drive the UI to amplify the suspected leak, snapshot before, ship the fix, snapshot after, then `diffMemgraphs`.
+
+| Tool | What |
+|---|---|
+| `bootAndLaunchForLeakInvestigation` | Single-call build + boot + install + launch with `MallocStackLogging=1` propagated via `SIMCTL_CHILD_*`. Resolves the simulator (udid, name+os, or whichever is booted), discovers `BUILT_PRODUCTS_DIR` / `WRAPPER_NAME` / `EXECUTABLE_NAME` / `PRODUCT_BUNDLE_IDENTIFIER` from `xcodebuild -showBuildSettings -json`, and returns the host PID + UDID + bundle id ready to chain into `captureMemgraph`. Required because `leaks --outputGraph` regressed on macOS 26.x and only works when the target was launched with malloc-stack-logging in its environment. |
+| `replayScenario` | Drive the iOS Simulator through tap / swipe / wait / type actions with a `repeat` count to amplify leaks that only manifest after N iterations. Tap targets accept `label`, `elementId`, or `coords`. Soft dependency on Cameron Cooke's [axe](https://github.com/cameroncooke/AXe) CLI. |
+| `captureScenarioState` | Composite snapshot for verify-fix: writes `.memgraph` + `.png` screenshot + `.ui.json` accessibility tree into `outputDir`, all prefixed by `label` (typically `before` / `after`). Sub-captures are best-effort: if leaks fails on macOS 26.x the screenshot + UI tree still complete and the `captureMemgraph` workaroundNotice is surfaced via `memgraphWorkaroundNotice`. |
 
 ### Discover (2)
 
