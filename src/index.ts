@@ -45,6 +45,14 @@ import {
   bootAndLaunchForLeakInvestigationShape,
 } from "./tools/bootAndLaunchForLeakInvestigation.js";
 import {
+  replayScenario,
+  replayScenarioShape,
+} from "./tools/replayScenario.js";
+import {
+  captureScenarioState,
+  captureScenarioStateShape,
+} from "./tools/captureScenarioState.js";
+import {
   analyzeAnimationHitches,
   analyzeAnimationHitchesSchema,
 } from "./tools/analyzeAnimationHitches.js";
@@ -324,6 +332,38 @@ server.registerTool(
   },
   async (input) => {
     const result = await bootAndLaunchForLeakInvestigation(input);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  },
+);
+
+server.registerTool(
+  "replayScenario",
+  {
+    title: "Replay a UI scenario to amplify a suspected leak",
+    description:
+      "[mg.scenario] Drive the iOS Simulator through a sequence of UI actions (tap, swipe, wait, type) and optionally repeat the sequence N times to amplify a leak that only manifests after iteration. Tied to verify-fix: pair with captureScenarioState before/after to make leak reproductions deterministic. Soft dependency on `axe` (https://github.com/cameroncooke/AXe) — when missing, returns a structured workaroundNotice with install instructions. Tap targets accept `label`, `elementId`, or explicit `coords`.",
+    inputSchema: replayScenarioShape,
+  },
+  async (input) => {
+    const result = await replayScenario(input);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  },
+);
+
+server.registerTool(
+  "captureScenarioState",
+  {
+    title: "Capture a labeled before/after snapshot for verify-fix",
+    description:
+      "[mg.scenario] Composite snapshot: writes a `.memgraph`, a `.png` screenshot, and a `.ui.json` accessibility tree into `outputDir`, all prefixed by `label` (e.g. `before` / `after`). Designed to bracket a fix or a replayScenario call so you can chain into diffMemgraphs and validate that a cycle actually closed. Sub-captures are best-effort: if leaks fails (macOS 26.x minimal-corpse), the screenshot + UI tree still complete and the captureMemgraph workaroundNotice is surfaced for follow-up. Required: `simulatorUDID`, `outputDir`, and exactly one of `pid` / `appName`.",
+    inputSchema: captureScenarioStateShape,
+  },
+  async (input) => {
+    const result = await captureScenarioState(input);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };

@@ -178,6 +178,26 @@ export async function launchApp(
   return { simPid, bundleId };
 }
 
+/**
+ * Take a screenshot of the simulator's screen and write it to `outputPath`.
+ * Wraps `xcrun simctl io <udid> screenshot <path>`.
+ */
+export async function takeScreenshot(
+  udid: string,
+  outputPath: string,
+): Promise<void> {
+  const result = await runCommand(
+    "xcrun",
+    ["simctl", "io", udid, "screenshot", outputPath],
+    { timeoutMs: 30_000 },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `simctl io ${udid} screenshot failed (code ${result.code}): ${result.stderr || result.stdout}`,
+    );
+  }
+}
+
 /** Pure: parse the simulator-internal PID from `simctl launch` stdout. Exposed for tests. */
 export function parseLaunchPid(
   stdout: string,
