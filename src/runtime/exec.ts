@@ -11,10 +11,17 @@ export interface RunCommandOptions {
   cwd?: string;
   /** Timeout in ms (kill the child if it exceeds this). */
   timeoutMs?: number;
+  /**
+   * Extra environment variables to expose to the child process. When provided,
+   * these are MERGED on top of `process.env` (PATH, DEVELOPER_DIR, HOME and
+   * other inherited vars are preserved). Pass an empty object to inherit
+   * unchanged; pass `undefined` (or omit) for the same default.
+   */
+  env?: Record<string, string>;
 }
 
 /**
- * Run a command and collect stdout/stderr. Does not throw on non-zero exit code —
+ * Run a command and collect stdout/stderr. Does not throw on non-zero exit code,
  * the caller decides what's acceptable (e.g. `leaks` exits 1 when leaks are found,
  * which is normal).
  */
@@ -24,7 +31,13 @@ export function runCommand(
   opts: RunCommandOptions = {},
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd });
+    const env = opts.env
+      ? { ...process.env, ...opts.env }
+      : undefined;
+    const child = spawn(cmd, args, {
+      cwd: opts.cwd,
+      ...(env ? { env } : {}),
+    });
     let stdout = "";
     let stderr = "";
     let killedByTimeout = false;

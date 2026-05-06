@@ -41,6 +41,10 @@ import {
   captureMemgraphShape,
 } from "./tools/captureMemgraph.js";
 import {
+  bootAndLaunchForLeakInvestigation,
+  bootAndLaunchForLeakInvestigationShape,
+} from "./tools/bootAndLaunchForLeakInvestigation.js";
+import {
   analyzeAnimationHitches,
   analyzeAnimationHitchesSchema,
 } from "./tools/analyzeAnimationHitches.js";
@@ -299,11 +303,27 @@ server.registerTool(
   {
     title: "Capture a .memgraph from a running process",
     description:
-      "[mg.memory] Wrapper around `leaks --outputGraph`. Resolves `appName` to a PID via `pgrep -x` (or accepts `pid` directly), then writes a `.memgraph` snapshot. **Limitation**: only works for processes running on the local Mac (Mac apps + iOS simulator). Does NOT work for physical iOS devices — use Xcode's Memory Graph button there.",
+      "[mg.memory] Wrapper around `leaks --outputGraph`. Resolves `appName` to a PID via `pgrep -x` (or accepts `pid` directly), then writes a `.memgraph` snapshot. **Limitation**: only works for processes running on the local Mac (Mac apps + iOS simulator). Does NOT work for physical iOS devices, use Xcode's Memory Graph button there.",
     inputSchema: captureMemgraphShape,
   },
   async (input) => {
     const result = await captureMemgraph(input);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  },
+);
+
+server.registerTool(
+  "bootAndLaunchForLeakInvestigation",
+  {
+    title: "Build, boot, install, and launch an iOS app for leak investigation",
+    description:
+      "[mg.build] Single-call orchestration that runs `xcodebuild build` (optional), boots the iOS Simulator, installs the .app, and launches it with `MallocStackLogging=1` propagated via `SIMCTL_CHILD_*`. Required because `leaks --outputGraph` regressed on macOS 26.x and only works when the target was launched with malloc-stack-logging in its environment. Returns the host PID + simulator UDID + bundle id ready to chain into `captureMemgraph`. Auto-discovers BUILT_PRODUCTS_DIR, WRAPPER_NAME, EXECUTABLE_NAME, and PRODUCT_BUNDLE_IDENTIFIER from `xcodebuild -showBuildSettings -json`. Required: `scheme` and exactly one of `workspace` or `project`.",
+    inputSchema: bootAndLaunchForLeakInvestigationShape,
+  },
+  async (input) => {
+    const result = await bootAndLaunchForLeakInvestigation(input);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
