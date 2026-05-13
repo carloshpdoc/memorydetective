@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`recordTimeProfile` external timeout wrapper for the macOS 26.x `xctrace --time-limit` regression.** On some macOS 26.x simulator builds, `xctrace record` ignores `--time-limit` and runs indefinitely past its declared deadline. `recordTimeProfile` now wraps the invocation with a soft timeout at `durationSec + 30s` that sends `SIGINT` (so xctrace flushes the trace cleanly), waits up to 10s for graceful exit, then escalates to `SIGKILL` only if necessary. When the wrapper fires, the response gains `recordingTimedOut: true` and a structured `workaroundNotice` with `issue: "xctrace-time-limit-ignored"` listing concrete mitigations (iOS 18 sim runtime, shorter durations, simulator restart for partial-trace recovery). Previously the only outcomes were "xctrace exits cleanly" or "user kills the agent loop manually". Critically, `SIGTERM` (the previous default in `runCommand`) corrupts xctrace traces; this path explicitly uses `SIGINT` so the partial output remains parseable. `runCommand` in `src/runtime/exec.ts` gains two new options to support this: `timeoutSignal: NodeJS.Signals` (default `SIGTERM`, opt in to `SIGINT`) and `gracefulKillAfterMs: number` (default `0`, opt in to "resolve with `timedOut: true` instead of reject"). Default behavior preserved for all existing callers. 6 new unit tests in `src/runtime/exec.test.ts` cover the new paths.
+
 ### Changed
 
 - **Docs: macOS 26.x regression and the iOS 18 escape hatch documented prominently.** README gains a "Heads up for macOS 26.x users" callout in the Highlights section, naming the regression and the iOS 18 sim runtime workaround. USAGE.md Troubleshooting section now distinguishes `minimal-corpse` (relaunch with MallocStackLogging fixes) from `macos-26-task-for-pid-broken` (iOS 18 sim is the only reliable path), each with their own recovery checklist. Plus a note on the scheme-level Malloc Stack Logging toggle needed for Xcode's "View Memory Graph Hierarchy" on macOS 26.x.

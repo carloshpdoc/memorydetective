@@ -4,7 +4,7 @@ import { resolve as resolvePath, dirname } from "node:path";
 import { runCommand } from "../runtime/exec.js";
 
 /**
- * Base shape — exposed so the MCP layer can read `.shape` (ZodEffects from
+ * Base shape, exposed so the MCP layer can read `.shape` (ZodEffects from
  * `.superRefine()` doesn't expose shape).
  */
 export const recordTimeProfileShape = {
@@ -88,6 +88,12 @@ export const recordTimeProfileSchema = z
 
 export type RecordTimeProfileInput = z.infer<typeof recordTimeProfileSchema>;
 
+export interface RecordingTimeoutWorkaroundNotice {
+  issue: "xctrace-time-limit-ignored";
+  message: string;
+  fallbacks: string[];
+}
+
 export interface RecordTimeProfileResult {
   ok: boolean;
   command: string;
@@ -95,7 +101,47 @@ export interface RecordTimeProfileResult {
   durationSec: number;
   template: string;
   stderr?: string;
+  /**
+   * Present and `true` when xctrace ignored `--time-limit` and the external
+   * timeout wrapper had to SIGINT it. The `.trace` bundle on disk MAY be
+   * usable: xctrace flushes the active template on SIGINT, but if the
+   * escalation path had to send SIGKILL (after the graceful window) the
+   * trace may be missing template metadata and `analyzeTimeProfile` will
+   * fail to export it. Inspect `workaroundNotice` for the recovery path.
+   */
+  recordingTimedOut?: boolean;
+  /**
+   * Present when `recordingTimedOut` is true. Documents the
+   * `xctrace --time-limit` regression observed on macOS 26.x simulators
+   * and the practical mitigations.
+   */
+  workaroundNotice?: RecordingTimeoutWorkaroundNotice;
 }
+
+const XCTRACE_TIMEOUT_MESSAGE =
+  "xctrace did not exit when `--time-limit` elapsed (a known regression on some macOS 26.x simulators). memorydetective sent SIGINT after a grace window and waited up to 10s for xctrace to flush the trace cleanly. The `.trace` bundle at `output` may still be readable; if `analyzeTimeProfile` later reports a missing-template export error, the SIGKILL escalation fired before the flush completed and the trace is partial.";
+
+const XCTRACE_TIMEOUT_FALLBACKS = [
+  "Try recording on an iOS 18 simulator runtime, which does not exhibit the `--time-limit` ignore bug.",
+  "Shorten `durationSec` to 30s or less; the ignore behavior is more common on long recordings.",
+  "If `analyzeTimeProfile` fails on the partial `.trace`, re-record after restarting the simulator (`xcrun simctl shutdown <udid> && xcrun simctl boot <udid>`).",
+];
+
+/**
+ * Grace window beyond `--time-limit` before the wrapper SIGINTs xctrace.
+ * 30s matches the budget used by `analyzeTimeProfile` for export overhead
+ * and keeps the loop responsive when xctrace IS respecting the time limit.
+ */
+const XCTRACE_TIMEOUT_GRACE_SEC = 30;
+
+/**
+ * Time to wait for xctrace to flush the trace after SIGINT before escalating
+ * to SIGKILL. 10s is generous: xctrace's normal post-`--time-limit` shutdown
+ * takes 2-5 seconds in practice. SIGKILL leaves the trace partial (missing
+ * template metadata), but is the only way to guarantee the wrapper unblocks
+ * when xctrace is wedged.
+ */
+const XCTRACE_GRACEFUL_KILL_MS = 10_000;
 
 /** Pure: build the xctrace argv for the given input. Exposed for testing. */
 export function buildXctraceArgs(input: RecordTimeProfileInput): string[] {
@@ -121,10 +167,35 @@ export async function recordTimeProfile(
     throw new Error(`Output directory does not exist: ${outDir}`);
   }
   const args = buildXctraceArgs({ ...input, output });
+  // External timeout wrapper. xctrace itself receives `--time-limit Ns`, so
+  // the normal exit path is xctrace finishing on its own at N seconds. The
+  // wrapper here is a safety net for the macOS 26.x sim regression where
+  // xctrace ignores `--time-limit` and runs indefinitely. We give it a
+  // 30s grace beyond its own deadline, then SIGINT (so it flushes the
+  // trace), then escalate to SIGKILL after 10s if it is still wedged.
+  // SIGTERM specifically corrupts xctrace's output, so we never use it
+  // here.
   const result = await runCommand("xcrun", args, {
-    // Allow 30s grace beyond the recording duration for export/finalization.
-    timeoutMs: (input.durationSec + 60) * 1_000,
+    timeoutMs: (input.durationSec + XCTRACE_TIMEOUT_GRACE_SEC) * 1_000,
+    timeoutSignal: "SIGINT",
+    gracefulKillAfterMs: XCTRACE_GRACEFUL_KILL_MS,
   });
+  if (result.timedOut) {
+    return {
+      ok: false,
+      command: `xcrun ${args.join(" ")}`,
+      output,
+      durationSec: input.durationSec,
+      template: input.template,
+      stderr: result.stderr || undefined,
+      recordingTimedOut: true,
+      workaroundNotice: {
+        issue: "xctrace-time-limit-ignored",
+        message: XCTRACE_TIMEOUT_MESSAGE,
+        fallbacks: XCTRACE_TIMEOUT_FALLBACKS,
+      },
+    };
+  }
   if (result.code !== 0) {
     throw new Error(
       `xctrace record failed (code ${result.code}): ${result.stderr || result.stdout}`,
