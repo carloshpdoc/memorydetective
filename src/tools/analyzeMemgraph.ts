@@ -4,6 +4,10 @@ import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
 import { parseLeaksOutput, rootCyclesOnly } from "../parsers/leaksOutput.js";
 import {
+  parseReferenceTreeText,
+  type ReferenceTreeEntry,
+} from "../parsers/referenceTree.js";
+import {
   shortenForVerbosity,
   type Verbosity,
 } from "../parsers/shortenClassName.js";
@@ -39,7 +43,16 @@ export const analyzeMemgraphSchema = z.object({
     .max(50)
     .default(10)
     .describe(
-      "Cap on how many unique class names to surface per cycle's `classesInChain` array. Default 10 — enough to identify app-level types without flooding the response.",
+      "Cap on how many unique class names to surface per cycle's `classesInChain` array. Default 10, enough to identify app-level types without flooding the response.",
+    ),
+  referenceTreeTopN: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(200)
+    .default(20)
+    .describe(
+      "When `leakCount` is 0 (the typical abandoned-memory case), also run `leaks --referenceTree --groupByType --noContent` and surface the top N classes by live instance count in `abandonedMemoryTop[]`. Set to 0 to skip the second leaks invocation. Default 20.",
     ),
 });
 
@@ -85,8 +98,21 @@ export interface AnalyzeMemgraphResult {
   fullReport?: LeaksReport;
   /** Plain-English diagnosis (one liner). */
   diagnosis: string;
-  /** Pipeline hints — chain `classifyCycle` next, then `reachableFromCycle` to scope blame. */
+  /** Pipeline hints. Chain `classifyCycle` next, then `reachableFromCycle` to scope blame. */
   suggestedNextCalls?: NextCallSuggestion[];
+  /**
+   * Top live classes by instance count from the heap reference tree.
+   * Populated when `leakCount` is 0 and `referenceTreeTopN > 0`. Surfaces
+   * the abandoned-memory shape that the standard `leaks` count misses:
+   * objects that are technically reachable (so not "leaked" in the strict
+   * sense) but whose growth across repeated workflows indicates a real
+   * accumulation bug (KVO observers not invalidated, NotificationCenter
+   * observers leaked, caches that never evict, etc.). These classes are
+   * not formal leaks; they are reachable-but-suspicious and worth diffing
+   * against a baseline via `analyzeAbandonedMemory(before, after)` for
+   * the verdict.
+   */
+  abandonedMemoryTop?: ReferenceTreeEntry[];
 }
 
 /**
@@ -220,11 +246,60 @@ export async function analyzeMemgraph(
     );
   }
 
-  return summarizeLeaks(
+  const summary = summarizeLeaks(
     result.stdout,
     path,
     input.fullChains ?? false,
     input.verbosity ?? "compact",
     input.maxClassesInChain ?? 10,
   );
+
+  // Abandoned-memory surface: when `leaks` finds zero leaks, the reference
+  // tree still carries information about what the heap is holding alive.
+  // This is the only signal for the "orphaned KVO observer" / "abandoned
+  // cache" class of bugs that don't form a closed cycle. We invoke a second
+  // leaks pass with `--referenceTree --groupByType --noContent` and rank
+  // classes by live instance count. The caller can then chain into
+  // `analyzeAbandonedMemory(before, after)` to confirm growth shape across
+  // a workflow.
+  const topN = input.referenceTreeTopN ?? 20;
+  if (summary.totals.leakCount === 0 && topN > 0) {
+    const abandonedMemoryTop = await captureReferenceTreeTop(path, topN);
+    if (abandonedMemoryTop.length > 0) {
+      summary.abandonedMemoryTop = abandonedMemoryTop;
+    }
+  }
+
+  return summary;
+}
+
+/**
+ * Spawn a second `leaks` invocation with the reference-tree flags and parse
+ * the top N classes by instance count. Exposed as a helper so the
+ * integration is testable without spawning, by passing a precomputed
+ * stdout via the pure `parseReferenceTreeText` directly.
+ *
+ * Failure here is non-fatal: if leaks fails on the second invocation, we
+ * return an empty array rather than throwing, so the main analyze result
+ * is still returned to the caller. The most likely failure path is the
+ * same macOS 26.x kernel regression that hit the first invocation, which
+ * would already be surfaced via the earlier captureMemgraph step.
+ */
+async function captureReferenceTreeTop(
+  path: string,
+  topN: number,
+): Promise<ReferenceTreeEntry[]> {
+  try {
+    const result = await runCommand(
+      "leaks",
+      [path, "--referenceTree", "--groupByType", "--noContent"],
+      { timeoutMs: 5 * 60_000 },
+    );
+    if (result.code !== 0 && result.code !== 1) {
+      return [];
+    }
+    return parseReferenceTreeText(result.stdout, topN);
+  } catch {
+    return [];
+  }
 }
