@@ -56,6 +56,7 @@ export type CaptureMemgraphInput = z.infer<typeof captureMemgraphSchema>;
 
 export type WorkaroundIssue =
   | "minimal-corpse"
+  | "macos-26-task-for-pid-broken"
   | "permission-denied"
   | "leaks-not-found"
   | "transient";
@@ -111,6 +112,16 @@ const MINIMAL_CORPSE_FALLBACKS = [
   "Relaunch the app with MallocStackLogging=1 in its environment, then retry capture (Phase 2 tool: bootAndLaunchForLeakInvestigation).",
   "Open Xcode > Debug > View Memory Graph Hierarchy on the running process, then File > Export Memory Graph to save a .memgraph manually.",
   "Record an Allocations trace via recordTimeProfile (template Allocations) and inspect with analyzeAllocations. Not full cycle detection, but reveals top live classes.",
+];
+
+const MACOS_26_MESSAGE =
+  "leaks --outputGraph hit the macOS 26.x Apple-side kernel regression in `task_for_pid` against simulator processes. The failure mode matches `minimal-corpse`, but the root cause is the host OS, not your build or capture configuration. Other CLI memory-introspection tools (`heap`, `xctrace --template Allocations`) hit the same regression on the same host. The most reliable workaround today is to target an iOS 18 simulator runtime, which is pre-regression.";
+
+const MACOS_26_FALLBACKS = [
+  "Use an iOS 18 simulator runtime (install via Xcode > Settings > Platforms > +iOS 18.x). The macOS 26.x kernel regression does not affect iOS 18 sims.",
+  "Open Xcode > Debug > View Memory Graph Hierarchy on the running process, then File > Export Memory Graph. Requires Malloc Stack Logging enabled in the scheme's Diagnostics tab to avoid the same kernel failure path.",
+  "Record an Allocations trace via recordTimeProfile (template Allocations) and inspect with analyzeAllocations. Not full cycle detection, but reveals top live classes.",
+  "Set MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1 to silence the proactive notice once you have settled on a workaround.",
 ];
 
 const PERMISSION_DENIED_MESSAGE =
@@ -205,14 +216,27 @@ export async function detectMallocStackLogging(
   }
 }
 
-/** Pure: classify a leaks failure into a stable issue id, given exit + stderr. */
+/**
+ * Pure: classify a leaks failure into a stable issue id, given exit + stderr.
+ *
+ * When `isMacOS26` is true and the failure matches the minimal-corpse pattern,
+ * the issue is upgraded to `macos-26-task-for-pid-broken` so the workaround
+ * notice can name the root cause (Apple-side kernel regression) rather than
+ * implying the user's build configuration is at fault. The escalation keeps
+ * the failure-mode signature (minimal-corpse) and adds platform context, so
+ * agents that branch on the issue id can route to the iOS 18 simulator
+ * fallback first.
+ */
 export function classifyLeaksFailure(
   result: CommandResult,
+  isMacOS26: boolean = false,
 ): WorkaroundIssue | null {
   if (result.code === 0 || result.code === 1) return null;
   if (result.code === LEAKS_NOT_FOUND_CODE) return "leaks-not-found";
   const stderr = result.stderr || "";
-  if (MINIMAL_CORPSE_RE.test(stderr)) return "minimal-corpse";
+  if (MINIMAL_CORPSE_RE.test(stderr)) {
+    return isMacOS26 ? "macos-26-task-for-pid-broken" : "minimal-corpse";
+  }
   if (PERMISSION_DENIED_RE.test(stderr)) return "permission-denied";
   return "transient";
 }
@@ -224,6 +248,12 @@ function buildWorkaround(issue: WorkaroundIssue): WorkaroundNotice {
         issue,
         message: MINIMAL_CORPSE_MESSAGE,
         fallbacks: MINIMAL_CORPSE_FALLBACKS,
+      };
+    case "macos-26-task-for-pid-broken":
+      return {
+        issue,
+        message: MACOS_26_MESSAGE,
+        fallbacks: MACOS_26_FALLBACKS,
       };
     case "permission-denied":
       return {
@@ -279,21 +309,25 @@ export async function captureMemgraph(
     );
   }
 
+  const isMacOS26 = platformAdvisory != null;
   let result = await runLeaksOnce(pid, output);
-  let issue = classifyLeaksFailure(result);
+  let issue = classifyLeaksFailure(result, isMacOS26);
 
   // Single retry on transient failures only. Deterministic issues (minimal-corpse,
-  // permission-denied, leaks-not-found) won't change between attempts.
+  // macos-26-task-for-pid-broken, permission-denied, leaks-not-found) won't
+  // change between attempts.
   if (issue === "transient") {
     await new Promise((r) => setTimeout(r, 1000));
     result = await runLeaksOnce(pid, output);
-    issue = classifyLeaksFailure(result);
+    issue = classifyLeaksFailure(result, isMacOS26);
   }
 
   if (issue) {
     const workaroundNotice = buildWorkaround(issue);
     const suggestedNextCalls =
-      issue === "minimal-corpse" || issue === "transient"
+      issue === "minimal-corpse" ||
+      issue === "macos-26-task-for-pid-broken" ||
+      issue === "transient"
         ? buildAllocationsFallbackSuggestions()
         : undefined;
     return {

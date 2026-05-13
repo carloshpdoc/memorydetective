@@ -217,4 +217,34 @@ describe("classifyLeaksFailure", () => {
       classifyLeaksFailure({ code: 2, stdout: "", stderr: "weird error" }),
     ).toBe("transient");
   });
+
+  it("upgrades minimal-corpse to macos-26-task-for-pid-broken when isMacOS26", () => {
+    // Same stderr pattern as the standalone minimal-corpse case, but with
+    // platform context: the caller (captureMemgraph) detected we are on
+    // macOS 26.x and threads that signal through. The classifier swaps the
+    // issue id so the workaround notice names the root cause (Apple-side
+    // kernel regression) instead of implying it is a per-process config issue.
+    const stderr =
+      "leaks: Failed to get DYLD info for task from parent of minimal corpse";
+    expect(classifyLeaksFailure({ code: 2, stdout: "", stderr }, true)).toBe(
+      "macos-26-task-for-pid-broken",
+    );
+    expect(classifyLeaksFailure({ code: 2, stdout: "", stderr }, false)).toBe(
+      "minimal-corpse",
+    );
+  });
+
+  it("does not upgrade permission-denied or transient based on platform", () => {
+    // Only the minimal-corpse signature gets the macOS 26 escalation. Other
+    // failure modes (permission denied, leaks-not-found, transient) keep
+    // their existing issue ids regardless of the platform context, because
+    // those modes have causes orthogonal to the task_for_pid regression.
+    const permStderr = "task_for_pid(...) failed: insufficient privileges";
+    expect(
+      classifyLeaksFailure({ code: 2, stdout: "", stderr: permStderr }, true),
+    ).toBe("permission-denied");
+    expect(
+      classifyLeaksFailure({ code: 2, stdout: "", stderr: "weird error" }, true),
+    ).toBe("transient");
+  });
 });
