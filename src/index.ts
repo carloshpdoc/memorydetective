@@ -16,6 +16,10 @@ import {
   diffMemgraphsSchema,
 } from "./tools/diffMemgraphs.js";
 import {
+  analyzeAbandonedMemory,
+  analyzeAbandonedMemorySchema,
+} from "./tools/analyzeAbandonedMemory.js";
+import {
   classifyCycle,
   classifyCycleSchema,
 } from "./tools/classifyCycle.js";
@@ -204,6 +208,22 @@ server.registerTool(
   },
   async (input) => {
     const result = await diffMemgraphs(input);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  },
+);
+
+server.registerTool(
+  "analyzeAbandonedMemory",
+  {
+    title: "Diff reference-tree class counts and classify abandoned-memory shape",
+    description:
+      "[mg.memory] Compare two `.memgraph` snapshots on heap reference-tree class counts (NOT cycle list) and classify each class's growth shape. Surfaces the family of bugs the cycle-only `diffMemgraphs` misses: orphaned KVO observers, never-removed NotificationCenter handlers, caches that never evict, singleton-retained payloads, and the long tail of `unknown-growth` worth manual inspection.\n\nPair with the verify-fix loop: `captureScenarioState({label:'before'})` -> ship fix -> `captureScenarioState({label:'after'})` -> `analyzeAbandonedMemory(beforePath, afterPath)`. Validated end-to-end on the notelet investigation where AVPlayerItem went 342 to 0 across a fix that was invisible in standard `leaks` output (leakCount: 0 both sides).\n\nReturns `growthByClass[]` ranked by absolute delta, each entry tagged with `classification` (kvo-observer-orphaned, notificationcenter-observer-leaked, cache-too-aggressive, singleton-retains-payload, unknown-growth) + `confidence` tier + `hint`. The classifier escalates large co-occurrence growth: if NSKeyValueObservance grew, other large-delta classes are assumed to be the observed types being retained, classified as `kvo-observer-orphaned` with confidence scaling by delta size.",
+    inputSchema: analyzeAbandonedMemorySchema.shape,
+  },
+  async (input) => {
+    const result = await analyzeAbandonedMemory(input);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };

@@ -194,6 +194,7 @@ async function runAnalyze(memgraphPath: string, asJson: boolean): Promise<number
     fullChains: false,
     verbosity: "compact",
     maxClassesInChain: 10,
+    referenceTreeTopN: 20,
   });
 
   if (asJson) {
