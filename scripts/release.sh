@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/release.sh — full release automation for memorydetective.
+# scripts/release.sh: full release automation for memorydetective.
 #
 # Usage:
 #   ./scripts/release.sh <version> [<title-suffix>]
@@ -9,13 +9,13 @@
 #   ./scripts/release.sh 1.6.0 "MetricKit ingestion + 3 SwiftData patterns"
 #
 # The release title becomes:
-#   "v<version> — <title-suffix>"   if a suffix is provided
+#   "v<version>: <title-suffix>"   if a suffix is provided
 #   "v<version>"                    otherwise
 #
 # Preconditions (the script validates each):
 #   - Current branch is `main` and working tree is clean
 #   - `package.json` version matches the requested version
-#   - `CHANGELOG.md` has a `## [<version>] — <date>` entry
+#   - `CHANGELOG.md` has a `## [<version>] - <date>` entry
 #   - The tag does not already exist (locally or on origin)
 #   - The npm version is not already published
 #   - `gh` and `npm` CLIs are authenticated (`gh auth status`, `npm whoami`)
@@ -26,14 +26,14 @@
 #   3. Pushes `main` to origin (if local is ahead)
 #   4. Creates an annotated tag at HEAD
 #   5. Pushes the tag to origin
-#   6. Publishes to npm (`npm publish` — also re-runs build via prepublishOnly)
+#   6. Publishes to npm (`npm publish`, also re-runs build via prepublishOnly)
 #   7. Extracts the matching `## [<version>]` section from CHANGELOG.md as
 #      release notes
 #   8. Creates the GitHub Release with that title + notes
 #
 # If a step fails before step 4 (tag creation), the script is safe to re-run
 # after the underlying issue is fixed. After step 4, manual cleanup is required
-# (you'd have to delete the tag from origin to retry — risky).
+# (you'd have to delete the tag from origin to retry, risky).
 #
 # Internal post-release tasks (NOT automated; see ~/Desktop/internal/RELEASING.md):
 #   - Update ~/Desktop/internal/CONTINUE.md (version header + "What's shipped")
@@ -62,7 +62,7 @@ fi
 TAG="v$VERSION"
 TITLE="$TAG"
 if [[ -n "$TITLE_SUFFIX" ]]; then
-  TITLE="$TAG — $TITLE_SUFFIX"
+  TITLE="$TAG: $TITLE_SUFFIX"
 fi
 
 cd "$(git rev-parse --show-toplevel)"
@@ -80,7 +80,7 @@ if [[ "$BRANCH" != "main" ]]; then
 fi
 
 if ! git diff --quiet || ! git diff --staged --quiet; then
-  echo "error: working tree not clean — commit or stash first" >&2
+  echo "error: working tree not clean. Commit or stash first" >&2
   git status --short >&2
   exit 1
 fi
@@ -121,11 +121,11 @@ REMOTE_HEAD="$(git rev-parse origin/main 2>/dev/null || echo "")"
 BEHIND=0
 if [[ -n "$REMOTE_HEAD" ]] && [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
   if git merge-base --is-ancestor "$LOCAL_HEAD" "$REMOTE_HEAD"; then
-    echo "error: local main is behind origin/main — pull first" >&2
+    echo "error: local main is behind origin/main. Pull first" >&2
     exit 1
   fi
   if ! git merge-base --is-ancestor "$REMOTE_HEAD" "$LOCAL_HEAD"; then
-    echo "error: local main has diverged from origin/main — rebase first" >&2
+    echo "error: local main has diverged from origin/main. Rebase first" >&2
     exit 1
   fi
 fi
@@ -172,7 +172,7 @@ git push origin "$TAG"
 NOTES="$(sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | sed '1d;$d' | sed '/./,$!d')"
 
 if [[ -z "$NOTES" ]]; then
-  echo "warning: extracted release notes are empty — proceeding with title only" >&2
+  echo "warning: extracted release notes are empty. Proceeding with title only" >&2
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -202,7 +202,7 @@ echo "✅ Released $TAG"
 echo "   npm:    https://www.npmjs.com/package/memorydetective/v/$VERSION"
 echo "   github: https://github.com/carloshpdoc/memorydetective/releases/tag/$TAG"
 echo
-echo "Next steps (manual — see ~/Desktop/internal/RELEASING.md):"
+echo "Next steps (manual, see ~/Desktop/internal/RELEASING.md):"
 echo "  • Update ~/Desktop/internal/CONTINUE.md (version header + 'What's shipped' section)"
 echo "  • Mark shipped items in ~/Desktop/internal/v<series>-candidates.md (or successor)"
 echo "  • Announce if notable (Twitter / dev.to / HN)"
