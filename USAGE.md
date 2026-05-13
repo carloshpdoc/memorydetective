@@ -343,9 +343,15 @@ Known limit. `xcrun xctrace export` of the `time-profile` schema crashes on heav
 
 By design. `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device goes through Xcode's debugger over USB. Different mechanism, no public CLI equivalent. Use Xcode's Memory Graph button + File → Export Memory Graph for physical devices.
 
-### `captureMemgraph` returns `workaroundNotice: { issue: "minimal-corpse" }` (macOS 26.x)
+### `captureMemgraph` returns `workaroundNotice: { issue: "macos-26-task-for-pid-broken" }` or `"minimal-corpse"`
 
-`leaks --outputGraph` regressed on macOS 26.x and aborts with `Failed to get DYLD info for task` when the target process was not launched with `MallocStackLogging=1` in its environment. This is the new structured failure shape v1.8 surfaces:
+There are two related-but-distinct failure modes here. v1.9 routes them apart so the agent (and you) can pick the right recovery without trial and error.
+
+**`minimal-corpse`** fires when the target process was not launched with `MallocStackLogging=1`. Relaunching with the env var typically resolves it (see `bootAndLaunchForLeakInvestigation`).
+
+**`macos-26-task-for-pid-broken`** fires on macOS 26.x (Darwin kernel 25.x) when `leaks` fails with the same DYLD-info signature, but where the root cause is Apple's `task_for_pid` kernel regression. `MallocStackLogging` does not resolve it because the regression sits below the libmalloc layer. Other CLI memory-introspection tools (`heap`, `xctrace --template Allocations`) hit the same wall on the same host. The reliable workaround is **target an iOS 18 simulator runtime instead** (install via Xcode > Settings > Platforms > +iOS 18.x). This was empirically validated during the notelet investigation 2026-05-12 where every CLI path failed on iPhone 17 / iOS 26.4 sim but worked first-try on iPhone 16 / iOS 18 sim with the same demo app and capture flow.
+
+memorydetective surfaces both issue ids in the structured shape:
 
 ```jsonc
 {
@@ -367,13 +373,23 @@ By design. `leaks(1)` only attaches to processes on the local Mac (which include
 }
 ```
 
-Recovery options in order of preference:
+Recovery options:
+
+**For `minimal-corpse` on non-macOS-26.x hosts:**
 
 1. **Use `bootAndLaunchForLeakInvestigation`**. Single call that builds, boots, installs, and launches with the right env vars in one shot. Returns the host PID ready for `captureMemgraph`. This is the canonical fix.
 2. **Xcode manual export.** With the app attached to Xcode debugger: Debug > View Memory Graph Hierarchy, then File > Export Memory Graph. Pass the resulting `.memgraph` to `analyzeMemgraph`.
 3. **Allocations fallback.** Follow `suggestedNextCalls` to record an `Allocations` trace and inspect with `analyzeAllocations`. Not full cycle detection but reveals top live classes.
 
-The `getInvestigationPlaybook({ kind: "memgraph-leak" })` response now carries a `troubleshooting` field with these recovery paths inline so an LLM agent can branch deterministically.
+**For `macos-26-task-for-pid-broken` on macOS 26.x:**
+
+1. **iOS 18 simulator runtime (canonical).** Install via Xcode > Settings > Platforms > +iOS 18.x. Build + launch your app on the iOS 18 sim instead of the macOS 26.x sim. `leaks`, `captureMemgraph`, `captureScenarioState`, and all downstream tools work normally there. This is the only fully-automatable path today.
+2. **Xcode manual export with the scheme toggle.** Edit your Run scheme: Diagnostics tab > check Malloc Stack Logging. Then `Cmd+R`, drive the scenario, pause the debugger, Debug > View Memory Graph Hierarchy, File > Export Memory Graph. Without the scheme toggle, View Memory Graph fails with `VMUTaskMemoryScanner` errors on macOS 26.x.
+3. **`recordTimeProfile` Allocations trace.** Run the Allocations template against the live process, then `analyzeAllocations` for class counts. Avoid `--time-limit` past 30s on macOS 26.x sims due to a separate xctrace bug (see `recordTimeProfile` notes).
+
+Set `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1` to silence the proactive stderr banner once you have settled on a workaround.
+
+The `getInvestigationPlaybook({ kind: "memgraph-leak" })` response carries a `troubleshooting` field with these recovery paths inline so an LLM agent can branch deterministically.
 
 ### `replayScenario` returns `workaroundNotice: { issue: "axe-not-found" }`
 

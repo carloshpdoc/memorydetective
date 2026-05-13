@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs: macOS 26.x regression and the iOS 18 escape hatch documented prominently.** README gains a "Heads up for macOS 26.x users" callout in the Highlights section, naming the regression and the iOS 18 sim runtime workaround. USAGE.md Troubleshooting section now distinguishes `minimal-corpse` (relaunch with MallocStackLogging fixes) from `macos-26-task-for-pid-broken` (iOS 18 sim is the only reliable path), each with their own recovery checklist. Plus a note on the scheme-level Malloc Stack Logging toggle needed for Xcode's "View Memory Graph Hierarchy" on macOS 26.x.
+
 ### Added
 
 - **New `macos-26-task-for-pid-broken` workaround issue.** When `captureMemgraph` detects a `minimal-corpse` failure pattern AND the host is macOS 26.x (Darwin kernel 25.x), the workaround notice now upgrades the `issue` field from `minimal-corpse` to `macos-26-task-for-pid-broken`, swaps in a platform-aware message that names the Apple-side kernel regression as the root cause, and reorders the `fallbacks[]` to put the iOS 18 simulator runtime first. Adjusts `suggestedNextCalls` to chain into `recordTimeProfile` + `analyzeAllocations` on the new issue id the same way it does for `minimal-corpse`. Agents that branch on the issue id should add a case for the new value; the existing `minimal-corpse` branch continues to fire on non-macOS-26 hosts (older macOS, future macOS releases pending verification). 2 new unit tests cover the upgrade path and confirm `permission-denied` / `transient` are unaffected by the platform context. `classifyLeaksFailure` gains an optional `isMacOS26: boolean` parameter (defaults to `false`, so existing callers compile unchanged).
