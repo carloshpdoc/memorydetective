@@ -124,6 +124,39 @@ describe("parseAxeDescribeUI", () => {
     });
   });
 
+  it("resolves identifier from AXUniqueId (SwiftUI accessibilityIdentifier shape)", () => {
+    // SwiftUI's .accessibilityIdentifier("present-button") emits as
+    // AXUniqueId in `axe describe-ui` output, not AXIdentifier.
+    // Surfaced from the notelet investigation 2026-05-12 where tap-by-elementId
+    // never matched because normalizeAxeNode only read AXIdentifier.
+    const json = JSON.stringify({
+      AXLabel: "App",
+      children: [
+        {
+          AXLabel: "Present",
+          AXFrame: { x: 100, y: 200, width: 80, height: 40 },
+          AXUniqueId: "present-button",
+        },
+      ],
+    });
+    const tree = parseAxeDescribeUI(json);
+    expect(tree.children?.[0].identifier).toBe("present-button");
+    expect(tree.children?.[0].label).toBe("Present");
+  });
+
+  it("prefers AXIdentifier over AXUniqueId when both are present", () => {
+    const json = JSON.stringify({
+      children: [
+        {
+          AXIdentifier: "from-axidentifier",
+          AXUniqueId: "from-axuniqueid",
+        },
+      ],
+    });
+    const tree = parseAxeDescribeUI(json);
+    expect(tree.children?.[0].identifier).toBe("from-axidentifier");
+  });
+
   it("tolerates leading and trailing noise around the JSON", () => {
     const json = JSON.stringify({ AXLabel: "Root" });
     const stdout = `info: querying simulator\n${json}\nlog: done\n`;

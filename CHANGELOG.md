@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`replayScenario` and `captureScenarioState`: tap targets by `elementId` now resolve SwiftUI's `accessibilityIdentifier(_:)`.** The internal `normalizeAxeNode` in `src/runtime/axe.ts` previously only read the `AXIdentifier` key when populating `UIElement.identifier`, but `axe describe-ui` (and Apple's accessibility tree) emit the SwiftUI `accessibilityIdentifier` value under `AXUniqueId`. Result: every `tap` targeted by `elementId` failed with "Could not locate element matching ..." even when the element was present in the tree. Now reads both keys in order (`AXIdentifier` first, then `AXUniqueId`). Surfaced from the notelet investigation 2026-05-12 where 20 replay iterations all failed to find a SwiftUI Button identified by `.accessibilityIdentifier("present-button")`. 2 new unit tests cover the AXUniqueId path and the precedence case.
+
 ## [1.8.1] - 2026-05-13
 
 Metadata-only release to enable submission to the official MCP Registry (`registry.modelcontextprotocol.io`). Adds the `mcpName` property to `package.json` so the registry can verify that the published npm package matches the registry submission metadata.

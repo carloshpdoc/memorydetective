@@ -120,7 +120,12 @@ function normalizeAxeNode(raw: unknown): UIElement {
     "title",
   ]);
   if (labelKey != null) out.label = labelKey;
-  const idKey = pickFirstString(obj, ["AXIdentifier", "identifier", "id"]);
+  const idKey = pickFirstString(obj, [
+    "AXIdentifier",
+    "AXUniqueId",
+    "identifier",
+    "id",
+  ]);
   if (idKey != null) out.identifier = idKey;
   const roleKey = pickFirstString(obj, ["AXRole", "role", "type"]);
   if (roleKey != null) out.role = roleKey;
