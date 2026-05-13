@@ -9,7 +9,7 @@ import {
   type PlatformAdvisory,
 } from "../runtime/platformCheck.js";
 
-/** Base shape — exposed so the MCP layer can read `.shape`. */
+/** Base shape, exposed so the MCP layer can read `.shape`. */
 export const captureMemgraphShape = {
   pid: z
     .number()
