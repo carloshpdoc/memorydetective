@@ -278,6 +278,12 @@ Copilot's MCP integration moves fast. If this snippet is stale, see the [VS Code
 
 </details>
 
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1` | Silence the macOS 26.x platform advisory that captureMemgraph, captureScenarioState, and bootAndLaunchForLeakInvestigation emit on first use. Useful once you have an iOS 18 sim runtime installed and do not need the reminder. |
+
 ---
 
 ## API

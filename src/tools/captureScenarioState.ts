@@ -21,6 +21,11 @@ import {
 } from "./captureMemgraph.js";
 import { takeScreenshot } from "../runtime/simctl.js";
 import { checkAxeAvailable, describeUI } from "../runtime/axe.js";
+import {
+  getPlatformAdvisory,
+  maybeLogPlatformAdvisoryOnce,
+  type PlatformAdvisory,
+} from "../runtime/platformCheck.js";
 
 export const captureScenarioStateShape = {
   simulatorUDID: z
@@ -96,11 +101,21 @@ export interface CaptureScenarioStateResult {
   memgraphWorkaroundNotice?: WorkaroundNotice;
   subFailures: CaptureScenarioSubFailure[];
   warnings?: string[];
+  /**
+   * Present on hosts where a platform-side regression affects the memgraph
+   * sub-capture (today: macOS 26.x `task_for_pid` kernel regression).
+   * Surfaced even when the screenshot + uiTree sub-captures succeed, so the
+   * caller knows the memgraph failure is not a misconfiguration on their end.
+   */
+  platformAdvisory?: PlatformAdvisory;
 }
 
 export async function captureScenarioState(
   input: CaptureScenarioStateInput,
 ): Promise<CaptureScenarioStateResult> {
+  const platformAdvisory = getPlatformAdvisory();
+  maybeLogPlatformAdvisoryOnce(platformAdvisory);
+
   const outputDir = resolvePath(input.outputDir);
   if (!existsSync(outputDir)) {
     mkdirSync(outputDir, { recursive: true });
@@ -194,6 +209,7 @@ export async function captureScenarioState(
     ...(memgraphWorkaroundNotice ? { memgraphWorkaroundNotice } : {}),
     subFailures,
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(platformAdvisory ? { platformAdvisory } : {}),
   };
 }
 

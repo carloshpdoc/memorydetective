@@ -30,6 +30,11 @@ import {
   launchApp,
 } from "../runtime/simctl.js";
 import type { NextCallSuggestion } from "../types.js";
+import {
+  getPlatformAdvisory,
+  maybeLogPlatformAdvisoryOnce,
+  type PlatformAdvisory,
+} from "../runtime/platformCheck.js";
 
 const simulatorSelectorSchema = z.object({
   udid: z.string().optional(),
@@ -138,6 +143,14 @@ export interface BootAndLaunchForLeakInvestigationResult {
   warnings?: string[];
   failureReason?: string;
   suggestedNextCalls?: NextCallSuggestion[];
+  /**
+   * Present on hosts where a platform-side regression affects the downstream
+   * leak/capture flow this tool prepares for (today: macOS 26.x
+   * `task_for_pid` kernel regression). Surfaced even when boot + launch
+   * succeed, so the caller knows captureMemgraph may still fail with
+   * `minimal-corpse` and which fallback path to try first.
+   */
+  platformAdvisory?: PlatformAdvisory;
 }
 
 const DEFAULT_ENV_VARS: Record<string, string> = {
@@ -145,6 +158,15 @@ const DEFAULT_ENV_VARS: Record<string, string> = {
 };
 
 export async function bootAndLaunchForLeakInvestigation(
+  input: BootAndLaunchForLeakInvestigationInput,
+): Promise<BootAndLaunchForLeakInvestigationResult> {
+  const platformAdvisory = getPlatformAdvisory();
+  maybeLogPlatformAdvisoryOnce(platformAdvisory);
+  const result = await bootAndLaunchForLeakInvestigationImpl(input);
+  return platformAdvisory ? { ...result, platformAdvisory } : result;
+}
+
+async function bootAndLaunchForLeakInvestigationImpl(
   input: BootAndLaunchForLeakInvestigationInput,
 ): Promise<BootAndLaunchForLeakInvestigationResult> {
   const steps: string[] = [];

@@ -3,6 +3,11 @@ import { existsSync } from "node:fs";
 import { resolve as resolvePath, dirname } from "node:path";
 import { runCommand, type CommandResult } from "../runtime/exec.js";
 import type { NextCallSuggestion } from "../types.js";
+import {
+  getPlatformAdvisory,
+  maybeLogPlatformAdvisoryOnce,
+  type PlatformAdvisory,
+} from "../runtime/platformCheck.js";
 
 /** Base shape — exposed so the MCP layer can read `.shape`. */
 export const captureMemgraphShape = {
@@ -81,6 +86,13 @@ export interface CaptureMemgraphResult {
   suggestedNextCalls?: NextCallSuggestion[];
   /** Raw stderr from `leaks` when capture failed. */
   stderr?: string;
+  /**
+   * Present on hosts where a platform-side regression affects this capture
+   * (today: macOS 26.x `task_for_pid` kernel regression). Agents should
+   * surface this to the user before assuming a `workaroundNotice` is a
+   * configuration issue specific to their setup.
+   */
+  platformAdvisory?: PlatformAdvisory;
 }
 
 const PHYSICAL_DEVICE_NOTICE =
@@ -246,6 +258,9 @@ async function runLeaksOnce(
 export async function captureMemgraph(
   input: CaptureMemgraphInput,
 ): Promise<CaptureMemgraphResult> {
+  const platformAdvisory = getPlatformAdvisory();
+  maybeLogPlatformAdvisoryOnce(platformAdvisory);
+
   const output = resolvePath(input.output);
   const outDir = dirname(output);
   if (!existsSync(outDir)) {
@@ -289,6 +304,7 @@ export async function captureMemgraph(
       workaroundNotice,
       ...(suggestedNextCalls ? { suggestedNextCalls } : {}),
       stderr: result.stderr || result.stdout,
+      ...(platformAdvisory ? { platformAdvisory } : {}),
     };
   }
 
@@ -304,5 +320,6 @@ export async function captureMemgraph(
     output,
     notice: PHYSICAL_DEVICE_NOTICE,
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(platformAdvisory ? { platformAdvisory } : {}),
   };
 }

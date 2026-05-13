@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Proactive macOS 26.x platform advisory.** `captureMemgraph`, `captureScenarioState`, and `bootAndLaunchForLeakInvestigation` now emit a one-time stderr banner and a structured `platformAdvisory` field on their response when running on macOS 26.x (Darwin kernel 25.x). The advisory documents Apple's `task_for_pid` kernel regression that blocks `leaks --outputGraph`, `heap`, and `xctrace --template Allocations` against simulator processes regardless of `MallocStackLogging=1`, and recommends an iOS 18 simulator runtime as the most reliable workaround. Set `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1` to silence. New `src/runtime/platformCheck.ts` with 10 unit tests covering the helper. Reduces wasted time for users hitting the regression for the first time. Surfaced during the notelet investigation 2026-05-12 where three independent CLI memory-introspection paths failed before iOS 18 was identified as the working escape hatch.
+
 ### Fixed
 
 - **`replayScenario` and `captureScenarioState`: tap targets by `elementId` now resolve SwiftUI's `accessibilityIdentifier(_:)`.** The internal `normalizeAxeNode` in `src/runtime/axe.ts` previously only read the `AXIdentifier` key when populating `UIElement.identifier`, but `axe describe-ui` (and Apple's accessibility tree) emit the SwiftUI `accessibilityIdentifier` value under `AXUniqueId`. Result: every `tap` targeted by `elementId` failed with "Could not locate element matching ..." even when the element was present in the tree. Now reads both keys in order (`AXIdentifier` first, then `AXUniqueId`). Surfaced from the notelet investigation 2026-05-12 where 20 replay iterations all failed to find a SwiftUI Button identified by `.accessibilityIdentifier("present-button")`. 2 new unit tests cover the AXUniqueId path and the precedence case.
