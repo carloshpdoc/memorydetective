@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-05-13
+
+Metadata-only release to enable submission to the official MCP Registry (`registry.modelcontextprotocol.io`). Adds the `mcpName` property to `package.json` so the registry can verify that the published npm package matches the registry submission metadata.
+
+### Added
+
+- **`mcpName: "io.github.carloshpdoc/memorydetective"`** in `package.json`. Required by the MCP Registry to verify package ownership. Follows the `io.github.<owner>/<repo>` convention mandated for GitHub-based authentication with `mcp-publisher`.
+
+### Notes
+
+- No code changes, no API changes, no functional changes for existing consumers.
+- Existing v1.8.0 installs keep working unchanged.
+- The plugin's `^1.7` SPM-style range picks this up automatically; no plugin sync needed for this patch.
+
 ## [1.8.0] - 2026-05-06
 
 `leaks --outputGraph` regressed on macOS 26.x and aborts with `Failed to get DYLD info for task` when the target was not launched with malloc-stack-logging. This release fixes that end to end. `captureMemgraph` detects the regression and emits a structured `workaroundNotice`, the new `bootAndLaunchForLeakInvestigation` tool absorbs build + boot + install + launch with `MallocStackLogging=1` so capture works on the first try, and `replayScenario` + `captureScenarioState` close the verify-fix loop with deterministic before/after snapshots. 28 -> 31 MCP tools, 213 -> 287 tests.
