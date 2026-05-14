@@ -96,6 +96,10 @@ import {
   compareTracesByPatternSchema,
 } from "./tools/compareTracesByPattern.js";
 import {
+  cleanupTraces,
+  cleanupTracesSchema,
+} from "./tools/cleanupTraces.js";
+import {
   swiftGetSymbolDefinition,
   swiftGetSymbolDefinitionSchema,
   swiftFindSymbolReferences,
@@ -225,6 +229,20 @@ server.registerTool(
       "analyzeAbandonedMemory",
       input.outputFormat,
     );
+  },
+);
+
+server.registerTool(
+  "cleanupTraces",
+  {
+    title: "Preview and delete `.trace` bundles under TRACE_ROOT",
+    description:
+      "[ops] Triage and clean up `.trace` bundles produced by `recordTimeProfile`. Each bundle is typically tens to hundreds of MB; after a few sessions the trace root fills up fast and v1.8 had no built-in cleanup.\n\n**Default-safe:** `dryRun: true` by default. The tool returns the list of candidates with `path`, `sizeMB`, and `ageDays` (sorted oldest-first) but deletes nothing. Pass `dryRun: false` only when the user has reviewed the candidates and authorized deletion.\n\n**Scope:** restricted to `MEMORYDETECTIVE_TRACE_ROOT` by default. To clean up an arbitrary directory, pass `root: <path>` AND set `MEMORYDETECTIVE_ALLOW_EXTERNAL_CLEANUP=1` in the env. Without the env var the tool returns `ok: false` with the failure reason and deletes nothing; destructive disk operations outside the configured boundary are default-deny.\n\n**Recursion boundary:** the tool walks subdirectories looking for `*.trace` directories, but stops at the `.trace` boundary (does NOT descend INTO bundles). xctrace writes structured content inside (Run1, Form1.template, etc.) that must not be treated as nested bundles.\n\nUse `olderThanDays: N` to keep recent traces and only target stale ones (e.g. older than 7 days). Omit to consider all bundles regardless of age.",
+    inputSchema: cleanupTracesSchema.shape,
+  },
+  async (input) => {
+    const result = cleanupTraces(input);
+    return formatMcpResponse(result, "cleanupTraces", input.outputFormat);
   },
 );
 
