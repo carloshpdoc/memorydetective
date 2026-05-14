@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-05-14
+
+Four-phase patch completing the v1.10 retro §7.2 propagation (`countAlive`, `findRetainers`, `verifyFix` reference-tree integrations) and internalizing the v1.9 cross-schema correlation (`analyzeHangs` auto-classification). The agent chain `analyzeAbandonedMemory` → `findRetainers` → `countAlive` → `verifyFix` no longer falls off a cliff after the first call.
+
+### Added
+
+- **`countAlive` reference-tree integration.** New `includeReferenceTree: boolean` input flag (default false preserves v1.11 behavior). When true, spawns `leaks --referenceTree --groupByType --noContent` in parallel with the existing cycle pass, merges counts by class name, and surfaces a new `actionableCounts[]` field filtered via `isFrameworkNoise`. For `countAlive({ className: "AVPlayerItem", includeReferenceTree: true })` on the notelet pre-fix memgraph, returns `instanceCount: 685` (substring match captures both AVPlayerItem 342 + AVPlayerItemInternal 343); for the topN path, surfaces AVCMNotificationDispatcher / __NSObserver / AVPlayerItem instead of NSMutableDictionary / CFString noise. New per-class `byCycle` + `byReferenceTree` breakdown fields when the flag is on. 3 new schema validation tests.
+
+- **`verifyFix` abandoned-memory verdict fallback.** v1.11 returned `overallVerdict: "PASS"` with empty `patternResolution[]` on the notelet pair (both `leakCount: 0`); v1.12 chains internally into `analyzeAbandonedMemory` when no cycle patterns fire on either side. New `verdictSource: "cycle-pattern" | "abandoned-memory"`, `freedClasses[]`, `regressionClasses[]` fields. Magnitude-dominance heuristic resolves verdict to PASS / PARTIAL / FAIL by comparing the sum of `|freed delta|` to `|growth delta|` at a 2x ratio. Notelet pair now returns `verdict: PASS` with diagnosis "Fix verified via abandoned-memory shrinkage: 10,386 instances freed dominates the residual 4,531-instance growth (typically Swift runtime / font cache / ObjC class table)." `isFrameworkNoise` extended to flag `N bytes into <X 0xADDR> [size]` heap-offset entries so the magnitude check doesn't get fooled by partial-allocation noise. 1 new reference-tree filter test.
+
+- **`findRetainers` reference-tree chains.** New `includeReferenceTree: boolean` input flag (default false). When true, spawns `leaks --debug=stacks --debug='<className>$'` and parses the per-instance allocation stack output via a new `src/parsers/leaksDebugStacks.ts` parser. Instances sharing the same call-stack fingerprint aggregate into one chain with `instanceCount`. Each chain exposes `callStack[]` (ordered frames from dyld root to allocation site), `retainers[]` (unique retainer classes with aggregate counts), `exampleAddress` (one representative instance), and `userFrame` (the deepest non-system frame, surfacing the actual line a developer would inspect). New 11-test parser file. leaks's `--debug=` predicate restriction documented in the schema description: `^` is rejected by leaks, only trailing `$` works. MallocStackLogging caveat documented: Xcode-exported memgraphs may surface fewer chains than the total instance count because `leaks --debug=stacks` only emits blocks for instances whose allocation stack was recorded.
+
+- **`analyzeHangs` cross-schema correlation.** v1.9 added `mainThreadViolations[]` enrichment via the caller-supplied `topFramesByHangStartNs` map; v1.12 internalizes it. New `includeStackClassification: boolean` input flag (default false preserves v1.9 behavior). When true, exports the `time-profile` schema in parallel with `potential-hangs`, correlates samples to hang windows by timestamp (sample in `[hang.startNs, hang.startNs + hang.durationNs]`), picks the dominant top frame per hang by aggregate weight, and runs `classifyHangFrame()` on it. New pure `correlateTimeProfileToHangs()` helper. Caller-supplied maps still take precedence over the auto-correlation. 8 new pure correlation tests covering empty inputs both sides, in/out-of-window, weight tiebreaker, backtrace fallback, multi-hang independence, default-weight handling.
+
+### Changed
+
+- `package.json` + `server.json`: 1.11.0 → 1.12.0.
+- `compareTracesByPattern` call sites of `analyzeHangs` now pass `includeStackClassification: false` explicitly to satisfy the inferred `analyzeHangs` input type (cosmetic; no behavioral change).
+
 ## [1.11.0] - 2026-05-14
 
 Three-fix patch driven by the v1.10 validation pass on the global npm binary. The v1.10 retro §7 surfaced gaps that v1.11 closes: CLI human-output ignored the new abandoned-memory data, `diffMemgraphs` had the same reference-tree blind spot v1.10 fixed only in `analyzeMemgraph` + `analyzeAbandonedMemory`, and there was no orientation tool for `.trace` bundles.
@@ -429,7 +448,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.8.1...v1.9.0

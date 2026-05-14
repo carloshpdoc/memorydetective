@@ -1,6 +1,6 @@
 {
   "name": "memorydetective",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "mcpName": "io.github.carloshpdoc/memorydetective",
   "description": "MCP server for iOS leak hunting and performance investigation. 34 tools across .memgraph and .trace files, 36-pattern retain-cycle classifier with Swift fixTemplate snippets, abandoned-memory diff for KVO/NotificationCenter/cache shapes that escape leaks(1), per-test CI gate (detectLeaksInXCTest + detectLeaksInXCUITest with self-contained HTML reports), main-thread violation classifier on analyzeHangs, single-call build+boot+launch for the macOS 26.x leaks --outputGraph regression, replayScenario + captureScenarioState verify-fix loop, compareTracesByPattern CI gate on hangs/hitches/launch regressions, SourceKit-LSP source bridging. macOS only (depends on leaks(1) and xctrace).",
   "type": "module",
