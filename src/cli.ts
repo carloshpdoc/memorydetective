@@ -357,6 +357,32 @@ async function runAnalyze(memgraphPath: string, asJson: boolean): Promise<number
 
   console.log(`\n  ${C.bold}Diagnosis:${C.reset}`);
   console.log(`    ${C.green}${result.diagnosis}${C.reset}\n`);
+
+  // Abandoned-memory surface for the leakCount=0 case. The data is parsed
+  // from the reference tree in v1.10+; this block surfaces it in the human
+  // view so terminal users don't walk away thinking the heap is clean when
+  // it isn't. Suppressed when empty (cycle-shape memgraphs).
+  const suspects = result.abandonedMemorySuspects ?? [];
+  if (suspects.length > 0) {
+    console.log(`  ${C.bold}Abandoned-memory suspects${C.reset} ${C.dim}(top 5, filtered for framework noise):${C.reset}`);
+    const nameWidth = Math.max(
+      ...suspects.slice(0, 5).map((e) => Math.min(e.className.length, 56)),
+      24,
+    );
+    console.log(
+      `    ${C.dim}${"Class".padEnd(nameWidth)}  ${"Instances".padStart(10)}  ${"Bytes".padStart(12)}${C.reset}`,
+    );
+    for (const entry of suspects.slice(0, 5)) {
+      const name = truncate(entry.className, nameWidth).padEnd(nameWidth);
+      const insts = entry.instanceCount.toLocaleString().padStart(10);
+      const bytes = entry.totalBytes.toLocaleString().padStart(12);
+      console.log(`    ${name}  ${insts}  ${bytes}`);
+    }
+    console.log(
+      `    ${C.dim}(pass --json for the full top-20 plus the raw abandonedMemoryTop view)${C.reset}\n`,
+    );
+  }
+
   console.log(DIAGNOSIS_FOOTER + "\n");
   return 0;
 }
@@ -377,6 +403,10 @@ async function runClassify(memgraphPath: string, asJson: boolean): Promise<numbe
 
   if (result.classified.length === 0) {
     console.log(`\n  ${C.dim}No cycles to classify.${C.reset}\n`);
+    console.log(
+      `  ${C.dim}Tip: zero cycles is sometimes the abandoned-memory shape (leaks reachable from KVO observers, NotificationCenter blocks, or never-evicted caches). Try ${C.bold}memorydetective analyze${C.reset}${C.dim} for the abandoned-memory view.${C.reset}\n`,
+    );
+    console.log(DIAGNOSIS_FOOTER + "\n");
     return 0;
   }
 
