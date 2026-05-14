@@ -7,6 +7,7 @@ import {
   parseReferenceTreeText,
   type ReferenceTreeEntry,
 } from "../parsers/referenceTree.js";
+import { outputFormatField } from "../runtime/responseFormatter.js";
 import {
   shortenForVerbosity,
   type Verbosity,
@@ -54,6 +55,7 @@ export const analyzeMemgraphSchema = z.object({
     .describe(
       "When `leakCount` is 0 (the typical abandoned-memory case), also run `leaks --referenceTree --groupByType --noContent` and surface the top N classes by live instance count in `abandonedMemoryTop[]`. Set to 0 to skip the second leaks invocation. Default 20.",
     ),
+  outputFormat: outputFormatField,
 });
 
 export type AnalyzeMemgraphInput = z.infer<typeof analyzeMemgraphSchema>;

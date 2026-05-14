@@ -31,6 +31,7 @@ import {
   type ReferenceTreeEntry,
 } from "../parsers/referenceTree.js";
 import type { NextCallSuggestion } from "../types.js";
+import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeAbandonedMemoryShape = {
   beforePath: z
@@ -60,6 +61,7 @@ export const analyzeAbandonedMemoryShape = {
     .describe(
       "Optional substring filter. When set, only classes whose name contains this substring are included in the response. Useful for verifying a specific class went to baseline without seeing the surrounding noise.",
     ),
+  outputFormat: outputFormatField,
 } as const;
 
 export const analyzeAbandonedMemorySchema = z.object(

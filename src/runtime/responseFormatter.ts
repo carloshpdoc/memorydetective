@@ -1,0 +1,215 @@
+/**
+ * Shared response formatter for MCP tool outputs.
+ *
+ * Tools can declare `outputFormat?: "markdown" | "json" | "both"` (defaults to
+ * `"json"`, preserving v1.8 behavior). When the caller asks for a different
+ * shape, the registration wrapper in `src/index.ts` calls
+ * {@link formatMcpResponse} to produce the actual response content.
+ *
+ * Two audiences are served at once:
+ *   - **AI agents** (the typical caller) want raw JSON they can parse and chain
+ *     into the next call without re-reasoning.
+ *   - **Humans reading the same response** (the typical second audience: the
+ *     dev pasting the result into a PR comment, a Slack thread, or a Jira
+ *     ticket) want a markdown view that highlights the key fields.
+ *
+ * `outputFormat: "both"` returns BOTH content items in a single response, so a
+ * client can display the markdown to the user AND parse the JSON for the
+ * agent loop without an extra round-trip.
+ */
+
+import { z } from "zod";
+
+export const outputFormatField = z
+  .enum(["markdown", "json", "both"])
+  .optional()
+  .describe(
+    "Response format. Omitted or `json` (default, preserves v1.8 behavior) returns JSON.stringify of the result. `markdown` renders a human-readable view of the same data. `both` returns both content items in one response, so a client can display markdown to the user and parse JSON for the agent loop without a second call.",
+  );
+
+export type OutputFormat = z.infer<typeof outputFormatField>;
+
+export interface McpContentItem {
+  type: "text";
+  text: string;
+}
+
+/**
+ * Shape of the MCP tool response. Matches the SDK's expected type
+ * (which has an open index signature for arbitrary extension fields like
+ * `_meta`); we model it explicitly here so the formatter's return type
+ * can flow through `server.registerTool` without a cast.
+ */
+export interface McpResponse {
+  content: McpContentItem[];
+  [key: string]: unknown;
+}
+
+/**
+ * Pure: shape the MCP response based on the caller's `outputFormat`.
+ *
+ * For `json` and `both`, the JSON is `JSON.stringify(result, null, 2)`. For
+ * `markdown` and `both`, the markdown is rendered via {@link renderAsMarkdown}.
+ */
+export function formatMcpResponse(
+  result: unknown,
+  toolName: string,
+  format: OutputFormat | undefined,
+): McpResponse {
+  const mode: OutputFormat = format ?? "json";
+  const json = JSON.stringify(result, null, 2);
+  if (mode === "json") {
+    return { content: [{ type: "text", text: json }] };
+  }
+  const markdown = renderAsMarkdown(result, toolName);
+  if (mode === "markdown") {
+    return { content: [{ type: "text", text: markdown }] };
+  }
+  // "both": markdown first so a UI that picks content[0] gets the readable
+  // view, then JSON so an agent looking for the structured data finds it
+  // without having to parse the markdown.
+  return {
+    content: [
+      { type: "text", text: markdown },
+      { type: "text", text: json },
+    ],
+  };
+}
+
+/**
+ * Pure: render an arbitrary JSON-shaped value as markdown.
+ *
+ * The rendering is intentionally generic: it does not have per-tool
+ * templates. A `# Tool name` header, a `## Key` for each top-level field, and
+ * smart formatting for arrays of objects (tables when the rows share a
+ * schema) and scalars. Per-tool overrides can land in v1.9.1+ if any
+ * specific tool's output deserves a more curated view.
+ *
+ * Exposed for tests.
+ */
+export function renderAsMarkdown(value: unknown, toolName: string): string {
+  const lines: string[] = [`# ${toolName}`, ""];
+  if (value == null || typeof value !== "object") {
+    lines.push(formatScalar(value));
+    return lines.join("\n");
+  }
+  const obj = value as Record<string, unknown>;
+  for (const [key, val] of Object.entries(obj)) {
+    lines.push(`## ${key}`);
+    lines.push("");
+    lines.push(formatValue(val, 0));
+    lines.push("");
+  }
+  return lines.join("\n").trim() + "\n";
+}
+
+function formatValue(value: unknown, depth: number): string {
+  if (value == null) return "_(null)_";
+  if (typeof value === "string") return value || "_(empty)_";
+  if (typeof value === "number" || typeof value === "boolean")
+    return formatScalar(value);
+  if (Array.isArray(value)) return formatArray(value, depth);
+  if (typeof value === "object") return formatObject(value as Record<string, unknown>, depth);
+  return String(value);
+}
+
+function formatArray(arr: unknown[], depth: number): string {
+  if (arr.length === 0) return "_(empty array)_";
+  // Table if all entries are objects with a shared key set.
+  if (
+    arr.length > 0 &&
+    arr.every(
+      (e) => e != null && typeof e === "object" && !Array.isArray(e),
+    )
+  ) {
+    const objects = arr as Record<string, unknown>[];
+    const cols = collectCommonKeys(objects);
+    if (cols.length > 0 && cols.length <= 8) {
+      const header = `| ${cols.join(" | ")} |`;
+      const sep = `| ${cols.map(() => "---").join(" | ")} |`;
+      const rows = objects.slice(0, 50).map((o) => {
+        const cells = cols.map((c) => formatCell(o[c]));
+        return `| ${cells.join(" | ")} |`;
+      });
+      const tail = objects.length > 50 ? `\n_(${objects.length - 50} more rows omitted)_` : "";
+      return [header, sep, ...rows].join("\n") + tail;
+    }
+  }
+  // Otherwise bullet list of scalars / mixed.
+  return arr
+    .slice(0, 50)
+    .map((e) => `- ${formatCell(e)}`)
+    .join("\n");
+}
+
+function formatObject(obj: Record<string, unknown>, depth: number): string {
+  const entries = Object.entries(obj);
+  if (entries.length === 0) return "_(empty object)_";
+  if (depth >= 2) {
+    // Deeply nested: collapse to inline JSON to keep the markdown tidy.
+    return "```json\n" + JSON.stringify(obj, null, 2) + "\n```";
+  }
+  return entries
+    .map(([k, v]) => `- **${k}**: ${formatInline(v, depth + 1)}`)
+    .join("\n");
+}
+
+function formatInline(value: unknown, depth: number): string {
+  if (value == null) return "_(null)_";
+  if (typeof value === "string") return value || "_(empty)_";
+  if (typeof value === "number" || typeof value === "boolean")
+    return formatScalar(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "_(empty array)_";
+    if (value.length <= 5 && value.every((e) => typeof e !== "object" || e == null)) {
+      return `[${value.map((e) => formatCell(e)).join(", ")}]`;
+    }
+    return `\n${formatArray(value, depth)}`;
+  }
+  if (typeof value === "object") {
+    return `\n${formatObject(value as Record<string, unknown>, depth)}`;
+  }
+  return String(value);
+}
+
+function formatScalar(value: unknown): string {
+  if (value == null) return "_(null)_";
+  if (typeof value === "boolean") return value ? "`true`" : "`false`";
+  if (typeof value === "number") return `\`${value}\``;
+  return String(value);
+}
+
+function formatCell(value: unknown): string {
+  if (value == null) return "_";
+  if (typeof value === "string") {
+    // Escape pipes for table safety, truncate long strings.
+    const escaped = value.replace(/\|/g, "\\|");
+    return escaped.length > 80 ? escaped.slice(0, 77) + "..." : escaped;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return formatScalar(value);
+  }
+  if (Array.isArray(value)) return `[${value.length}]`;
+  if (typeof value === "object") {
+    // Compact inline JSON, truncated.
+    const s = JSON.stringify(value);
+    return s.length > 60 ? s.slice(0, 57) + "..." : s;
+  }
+  return String(value);
+}
+
+function collectCommonKeys(objects: Record<string, unknown>[]): string[] {
+  // Use the keys of the FIRST object as the column set, filtered to those
+  // present in at least half of the rows. Keeps the table compact when rows
+  // have optional fields.
+  if (objects.length === 0) return [];
+  const firstKeys = Object.keys(objects[0]);
+  const threshold = Math.ceil(objects.length / 2);
+  return firstKeys.filter((k) => {
+    let hits = 0;
+    for (const o of objects) {
+      if (Object.prototype.hasOwnProperty.call(o, k)) hits += 1;
+    }
+    return hits >= threshold;
+  });
+}

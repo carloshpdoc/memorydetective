@@ -115,6 +115,7 @@ import {
   readPatternResource,
 } from "./runtime/resources.js";
 import { PROMPTS, findPrompt } from "./runtime/prompts.js";
+import { formatMcpResponse } from "./runtime/responseFormatter.js";
 import { z } from "zod";
 
 const SERVER_NAME = "memorydetective";
@@ -134,14 +135,7 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeMemgraph(input);
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(result, null, 2),
-        },
-      ],
-    };
+    return formatMcpResponse(result, "analyzeMemgraph", input.outputFormat);
   },
 );
 
@@ -208,9 +202,7 @@ server.registerTool(
   },
   async (input) => {
     const result = await diffMemgraphs(input);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
+    return formatMcpResponse(result, "diffMemgraphs", input.outputFormat);
   },
 );
 
@@ -224,9 +216,11 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeAbandonedMemory(input);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
+    return formatMcpResponse(
+      result,
+      "analyzeAbandonedMemory",
+      input.outputFormat,
+    );
   },
 );
 
@@ -256,9 +250,7 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeHangs(input);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
+    return formatMcpResponse(result, "analyzeHangs", input.outputFormat);
   },
 );
 
@@ -272,9 +264,7 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeTimeProfile(input);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-    };
+    return formatMcpResponse(result, "analyzeTimeProfile", input.outputFormat);
   },
 );
 
@@ -400,7 +390,11 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeAnimationHitches(input);
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    return formatMcpResponse(
+      result,
+      "analyzeAnimationHitches",
+      input.outputFormat,
+    );
   },
 );
 
@@ -414,7 +408,7 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeAllocations(input);
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    return formatMcpResponse(result, "analyzeAllocations", input.outputFormat);
   },
 );
 
@@ -428,7 +422,7 @@ server.registerTool(
   },
   async (input) => {
     const result = await analyzeAppLaunch(input);
-    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    return formatMcpResponse(result, "analyzeAppLaunch", input.outputFormat);
   },
 );
 

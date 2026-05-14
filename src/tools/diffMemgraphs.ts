@@ -3,6 +3,7 @@ import { runLeaksAndParse } from "../runtime/leaks.js";
 import { rootCyclesOnly } from "../parsers/leaksOutput.js";
 import { countByClass } from "./countAlive.js";
 import type { LeaksReport, CycleNode } from "../types.js";
+import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const diffMemgraphsSchema = z.object({
   before: z
@@ -13,6 +14,7 @@ export const diffMemgraphsSchema = z.object({
     .string()
     .min(1)
     .describe("Absolute path to the comparison `.memgraph` file."),
+  outputFormat: outputFormatField,
 });
 
 export type DiffMemgraphsInput = z.infer<typeof diffMemgraphsSchema>;

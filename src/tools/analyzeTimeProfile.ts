@@ -8,6 +8,7 @@ import {
   asFormatted,
 } from "../parsers/xctraceXml.js";
 import type { DataStatus } from "../types.js";
+import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeTimeProfileSchema = z.object({
   tracePath: z
@@ -20,6 +21,7 @@ export const analyzeTimeProfileSchema = z.object({
     .positive()
     .default(20)
     .describe("Return the top N hottest stacks by sample count (default 20)."),
+  outputFormat: outputFormatField,
 });
 
 export type AnalyzeTimeProfileInput = z.infer<typeof analyzeTimeProfileSchema>;

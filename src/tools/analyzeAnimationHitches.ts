@@ -8,6 +8,7 @@ import {
   asFormatted,
 } from "../parsers/xctraceXml.js";
 import type { DataStatus } from "../types.js";
+import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeAnimationHitchesSchema = z.object({
   tracePath: z
@@ -38,6 +39,7 @@ export const analyzeAnimationHitchesSchema = z.object({
     .describe(
       "Optional time-window filter. Only hitches whose `startNs` falls within `[startMs, endMs]` (milliseconds since recording start) are included. Use this to answer 'what hitches happened during this 5-second user-visible jank window?' without re-recording.",
     ),
+  outputFormat: outputFormatField,
 });
 
 export type AnalyzeAnimationHitchesInput = z.infer<

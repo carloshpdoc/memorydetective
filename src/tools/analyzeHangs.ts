@@ -8,6 +8,7 @@ import {
   asFormatted,
 } from "../parsers/xctraceXml.js";
 import type { DataStatus } from "../types.js";
+import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeHangsSchema = z.object({
   tracePath: z
@@ -38,6 +39,7 @@ export const analyzeHangsSchema = z.object({
     .describe(
       "Optional time-window filter. Only hangs whose `startNs` falls within `[startMs, endMs]` (milliseconds since recording start) are included. Use this to answer 'what hangs happened between t=2s and t=7s?' without re-recording.",
     ),
+  outputFormat: outputFormatField,
 });
 
 export type AnalyzeHangsInput = z.infer<typeof analyzeHangsSchema>;

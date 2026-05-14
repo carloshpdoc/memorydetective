@@ -8,6 +8,7 @@ import {
   asFormatted,
 } from "../parsers/xctraceXml.js";
 import type { DataStatus } from "../types.js";
+import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeAllocationsSchema = z.object({
   tracePath: z
@@ -29,6 +30,7 @@ export const analyzeAllocationsSchema = z.object({
     .describe(
       "Filter out individual allocations smaller than this size in bytes (default 0). Use 1024 to focus on >1KB allocations.",
     ),
+  outputFormat: outputFormatField,
 });
 
 export type AnalyzeAllocationsInput = z.infer<typeof analyzeAllocationsSchema>;

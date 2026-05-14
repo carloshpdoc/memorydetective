@@ -7,6 +7,7 @@ import {
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
+import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeAppLaunchSchema = z.object({
   tracePath: z
@@ -15,6 +16,7 @@ export const analyzeAppLaunchSchema = z.object({
     .describe(
       "Absolute path to a `.trace` bundle recorded with the App Launch template (`xcrun xctrace record --template 'App Launch' --launch <bundleId>`).",
     ),
+  outputFormat: outputFormatField,
 });
 
 export type AnalyzeAppLaunchInput = z.infer<typeof analyzeAppLaunchSchema>;
