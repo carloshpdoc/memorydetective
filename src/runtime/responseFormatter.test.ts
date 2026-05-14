@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   formatMcpResponse,
   renderAsMarkdown,
+  renderVerifyFixTable,
 } from "./responseFormatter.js";
 
 describe("formatMcpResponse", () => {
@@ -121,5 +122,93 @@ describe("renderAsMarkdown", () => {
       "demo",
     );
     expect(md).toMatch(/\| --- \|/);
+  });
+});
+
+describe("renderVerifyFixTable (v1.10)", () => {
+  it("returns null for tools other than analyzeAbandonedMemory", () => {
+    expect(renderVerifyFixTable({}, "diffMemgraphs")).toBeNull();
+    expect(renderVerifyFixTable({}, "analyzeMemgraph")).toBeNull();
+  });
+
+  it("renders the actionableShrinkage table for the notelet-shape result", () => {
+    const result = {
+      diagnosis: "AVPlayerItem dropped 342 to 0; KVO observer-orphan fixed.",
+      actionableShrinkage: [
+        { className: "AVPlayerItem", beforeCount: 342, afterCount: 0, delta: -342 },
+        { className: "AVPlayerInternal", beforeCount: 297, afterCount: 0, delta: -297 },
+      ],
+      actionableGrowth: [],
+    };
+    const md = renderVerifyFixTable(result, "analyzeAbandonedMemory");
+    expect(md).toContain("# analyzeAbandonedMemory: verify-fix");
+    expect(md).toContain("## What the fix freed");
+    expect(md).toContain("| `AVPlayerItem` | 342 | 0 | -342 |");
+    expect(md).toContain("| `AVPlayerInternal` | 297 | 0 | -297 |");
+    expect(md).toContain("> AVPlayerItem dropped 342 to 0");
+  });
+
+  it("filters rows whose |delta| is below the actionable threshold (10)", () => {
+    const result = {
+      actionableShrinkage: [
+        { className: "Big", beforeCount: 100, afterCount: 0, delta: -100 },
+        { className: "Small", beforeCount: 5, afterCount: 0, delta: -5 },
+      ],
+      actionableGrowth: [],
+    };
+    const md = renderVerifyFixTable(result, "analyzeAbandonedMemory");
+    expect(md).toContain("`Big`");
+    expect(md).not.toContain("`Small`");
+  });
+
+  it("renders both shrinkage and growth sections when both exist", () => {
+    const result = {
+      actionableShrinkage: [
+        { className: "FixedClass", beforeCount: 100, afterCount: 0, delta: -100 },
+      ],
+      actionableGrowth: [
+        { className: "NewLeak", beforeCount: 0, afterCount: 50, delta: 50 },
+      ],
+    };
+    const md = renderVerifyFixTable(result, "analyzeAbandonedMemory");
+    expect(md).toContain("## What the fix freed");
+    expect(md).toContain("## Classes that grew (regressions or unrelated)");
+    expect(md).toContain("`FixedClass`");
+    expect(md).toContain("`NewLeak`");
+    // Growth row uses +N delta sign.
+    expect(md).toContain("| +50 |");
+  });
+
+  it("returns an empty-message when no actionable rows cross the threshold", () => {
+    const result = {
+      diagnosis: "Nothing changed in this run.",
+      actionableShrinkage: [],
+      actionableGrowth: [],
+    };
+    const md = renderVerifyFixTable(result, "analyzeAbandonedMemory");
+    expect(md).toContain("No class counts crossed the actionable threshold");
+    expect(md).toContain("> Nothing changed in this run.");
+  });
+
+  it("formatMcpResponse(verify-fix-table) routes to the focused renderer", () => {
+    const result = {
+      actionableShrinkage: [
+        { className: "AVPlayerItem", beforeCount: 342, afterCount: 0, delta: -342 },
+      ],
+      actionableGrowth: [],
+    };
+    const resp = formatMcpResponse(result, "analyzeAbandonedMemory", "verify-fix-table");
+    expect(resp.content).toHaveLength(1);
+    const text = (resp.content[0] as { text: string }).text;
+    expect(text).toContain("## What the fix freed");
+    expect(text).toContain("`AVPlayerItem`");
+  });
+
+  it("formatMcpResponse(verify-fix-table) falls back to markdown for other tools", () => {
+    const resp = formatMcpResponse({ ok: true }, "analyzeMemgraph", "verify-fix-table");
+    expect(resp.content).toHaveLength(1);
+    const text = (resp.content[0] as { text: string }).text;
+    // Generic markdown header for the tool.
+    expect(text).toContain("# analyzeMemgraph");
   });
 });

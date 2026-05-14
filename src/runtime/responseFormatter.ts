@@ -22,10 +22,10 @@ import { z } from "zod";
 import { getRedactionMode, redact } from "./redact.js";
 
 export const outputFormatField = z
-  .enum(["markdown", "json", "both"])
+  .enum(["markdown", "json", "both", "verify-fix-table"])
   .optional()
   .describe(
-    "Response format. Omitted or `json` (default, preserves v1.8 behavior) returns JSON.stringify of the result. `markdown` renders a human-readable view of the same data. `both` returns both content items in one response, so a client can display markdown to the user and parse JSON for the agent loop without a second call.",
+    "Response format. Omitted or `json` (default, preserves v1.8 behavior) returns JSON.stringify of the result. `markdown` renders a human-readable view of the same data. `both` returns both content items in one response, so a client can display markdown to the user and parse JSON for the agent loop without a second call. `verify-fix-table` (v1.10, applies to `analyzeAbandonedMemory` and `diffMemgraphs`) emits a focused 4-column markdown comparison table (Class | Before | After | Delta) of the actionable rows; other tools fall back to `markdown` for this value.",
   );
 
 export type OutputFormat = z.infer<typeof outputFormatField>;
@@ -68,6 +68,18 @@ export function formatMcpResponse(
   if (mode === "json") {
     return { content: [{ type: "text", text: json }] };
   }
+  // `verify-fix-table` is a focused renderer that takes precedence over
+  // the generic markdown one. Falls back to standard markdown when the
+  // tool does not implement a verify-fix view.
+  if (mode === "verify-fix-table") {
+    const focused = renderVerifyFixTable(redacted, toolName);
+    if (focused != null) {
+      return { content: [{ type: "text", text: focused }] };
+    }
+    // Fall through to markdown for tools that don't implement it.
+    const fallback = renderAsMarkdown(redacted, toolName);
+    return { content: [{ type: "text", text: fallback }] };
+  }
   const markdown = renderAsMarkdown(redacted, toolName);
   if (mode === "markdown") {
     return { content: [{ type: "text", text: markdown }] };
@@ -81,6 +93,117 @@ export function formatMcpResponse(
       { type: "text", text: json },
     ],
   };
+}
+
+interface VerifyFixRow {
+  className: string;
+  beforeCount: number;
+  afterCount: number;
+  delta: number;
+}
+
+/**
+ * Pure: render a verify-fix focused markdown table for tools that support
+ * it. Returns `null` if the tool's result does not match the expected
+ * verify-fix shape, signaling the caller to fall back to standard markdown.
+ *
+ * Supported tools:
+ *
+ * - `analyzeAbandonedMemory`: reads `actionableShrinkage[]` (the v1.10
+ *   verify-fix-default direction: classes that the fix freed) and
+ *   `actionableGrowth[]` (regressions the fix didn't address). Emits one
+ *   table for shrinkage and, when non-empty, a second smaller table for
+ *   growth. Threshold: |delta| >= 10 by default to filter cosmetic noise.
+ *
+ * - `diffMemgraphs`: reads `classCountChanges[]` (positive + negative).
+ *   Future expansion; for now returns null and falls back to standard
+ *   markdown.
+ *
+ * The 4-column layout is deliberately compact (Class | Before | After |
+ * Delta) so it renders cleanly in GitHub's markdown preview, dev.to, and
+ * agent chat contexts. A trailing `> Diagnosis: ...` blockquote carries
+ * the structured `diagnosis` field when present.
+ */
+export function renderVerifyFixTable(
+  result: unknown,
+  toolName: string,
+): string | null {
+  if (toolName !== "analyzeAbandonedMemory") {
+    return null;
+  }
+  if (result == null || typeof result !== "object") {
+    return null;
+  }
+  const obj = result as Record<string, unknown>;
+  const shrinkage = extractVerifyFixRows(obj["actionableShrinkage"]);
+  const growth = extractVerifyFixRows(obj["actionableGrowth"]);
+  const diagnosis = typeof obj["diagnosis"] === "string" ? (obj["diagnosis"] as string) : null;
+  // Threshold: filter cosmetic noise.
+  const DELTA_THRESHOLD = 10;
+  const filteredShrinkage = shrinkage.filter((r) => Math.abs(r.delta) >= DELTA_THRESHOLD);
+  const filteredGrowth = growth.filter((r) => Math.abs(r.delta) >= DELTA_THRESHOLD);
+  if (filteredShrinkage.length === 0 && filteredGrowth.length === 0) {
+    return [
+      "# analyzeAbandonedMemory: verify-fix",
+      "",
+      "_No class counts crossed the actionable threshold (|delta| >= 10)._",
+      diagnosis ? `\n> ${diagnosis}` : "",
+    ]
+      .join("\n")
+      .trim();
+  }
+  const sections: string[] = ["# analyzeAbandonedMemory: verify-fix", ""];
+  if (filteredShrinkage.length > 0) {
+    sections.push("## What the fix freed");
+    sections.push("");
+    sections.push("| Class | Before | After | Delta |");
+    sections.push("|---|---:|---:|---:|");
+    for (const row of filteredShrinkage) {
+      sections.push(
+        `| \`${row.className}\` | ${row.beforeCount} | ${row.afterCount} | ${row.delta} |`,
+      );
+    }
+    sections.push("");
+  }
+  if (filteredGrowth.length > 0) {
+    sections.push("## Classes that grew (regressions or unrelated)");
+    sections.push("");
+    sections.push("| Class | Before | After | Delta |");
+    sections.push("|---|---:|---:|---:|");
+    for (const row of filteredGrowth) {
+      sections.push(
+        `| \`${row.className}\` | ${row.beforeCount} | ${row.afterCount} | +${row.delta} |`,
+      );
+    }
+    sections.push("");
+  }
+  if (diagnosis) {
+    sections.push(`> ${diagnosis}`);
+  }
+  return sections.join("\n").trim();
+}
+
+function extractVerifyFixRows(value: unknown): VerifyFixRow[] {
+  if (!Array.isArray(value)) return [];
+  const rows: VerifyFixRow[] = [];
+  for (const item of value) {
+    if (item == null || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    if (
+      typeof r["className"] === "string" &&
+      typeof r["beforeCount"] === "number" &&
+      typeof r["afterCount"] === "number" &&
+      typeof r["delta"] === "number"
+    ) {
+      rows.push({
+        className: r["className"] as string,
+        beforeCount: r["beforeCount"] as number,
+        afterCount: r["afterCount"] as number,
+        delta: r["delta"] as number,
+      });
+    }
+  }
+  return rows;
 }
 
 /**
