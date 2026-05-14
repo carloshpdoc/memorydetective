@@ -59,6 +59,19 @@ describe("analyzeHangsFromXml", () => {
     expect(result.top).toEqual([]);
     expect(result.diagnosis).toContain("No hangs detected");
   });
+
+  it("sets status to 'available' when the hangs table is present", () => {
+    const result = analyzeHangsFromXml(hangsXml, "/fake/run.trace");
+    expect(result.status).toBe("available");
+  });
+
+  it("sets status to 'not_present' when no hangs table is in the trace", () => {
+    // Empty trace-query-result with no potential-hangs schema.
+    const empty = `<?xml version="1.0"?><trace-query-result></trace-query-result>`;
+    const result = analyzeHangsFromXml(empty, "/fake/run.trace");
+    expect(result.status).toBe("not_present");
+    expect(result.totals.rows).toBe(0);
+  });
 });
 
 describe("analyzeTimeProfileFromXml", () => {
@@ -68,6 +81,7 @@ describe("analyzeTimeProfileFromXml", () => {
     expect(result.ok).toBe(true);
     expect(result.totalSamples).toBe(0);
     expect(result.diagnosis).toMatch(/No time-profile/);
+    expect(result.status).toBe("not_present");
   });
 
   it("parses a synthetic time-profile XML", () => {

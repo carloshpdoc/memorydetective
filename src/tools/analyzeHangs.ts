@@ -7,6 +7,7 @@ import {
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
+import type { DataStatus } from "../types.js";
 
 export const analyzeHangsSchema = z.object({
   tracePath: z
@@ -55,6 +56,11 @@ export interface AnalyzeHangsResult {
   /** Filtered + sorted hangs, capped to topN. */
   top: HangEntry[];
   diagnosis: string;
+  /**
+   * Disambiguates empty arrays into "no data in the trace" vs "trace could
+   * not be exported" vs "data was exported partially". See {@link DataStatus}.
+   */
+  status: DataStatus;
 }
 
 /** Pure: turn parsed XML rows into our analyzed result. */
@@ -80,6 +86,7 @@ export function analyzeHangsFromXml(
       },
       top: [],
       diagnosis: "No potential-hangs table found in the trace.",
+      status: "not_present",
     };
   }
 
@@ -132,6 +139,7 @@ export function analyzeHangsFromXml(
     },
     top,
     diagnosis,
+    status: "available",
   };
 }
 

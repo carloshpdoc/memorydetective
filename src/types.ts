@@ -59,10 +59,38 @@ export interface LeaksReport {
 }
 
 /**
+ * Disambiguation of why a data section is empty or missing on a tool
+ * response. Replaces the older convention of "empty = no data found" which
+ * collapses three very different cases together.
+ *
+ * - `available`: data was exported and parsed. Empty arrays under this status
+ *   mean the trace genuinely had no rows for the section (e.g. no hang
+ *   events during the recording window).
+ * - `partial`: export started but did not finish. Typical cause is the Phase
+ *   1.4 xctrace timeout wrapper firing on a wedged recording. The data in
+ *   the response is a partial snapshot of what was flushed.
+ * - `not_exportable`: a GUI track exists in Instruments.app but `xcrun
+ *   xctrace export` has no exportable table schema for it on this OS. This
+ *   is an Apple-side limitation; the only recovery is to use Instruments.app
+ *   directly for that data family. Surfaced specifically so the agent does
+ *   not branch on "empty" as "no problem".
+ * - `not_present`: the requested table schema is simply not in the trace
+ *   bundle. Either the recording did not include that instrument template,
+ *   or the section is genuinely empty at the trace-bundle level. Different
+ *   from `not_exportable` because the data does not exist in the trace at
+ *   all, not just "exists but cannot be read".
+ */
+export type DataStatus =
+  | "available"
+  | "partial"
+  | "not_exportable"
+  | "not_present";
+
+/**
  * HATEOAS-style hint that an LLM agent can chain after the current tool's
  * result. We pre-populate `args` from the current response so the agent can
  * call the next tool with one fewer inference step. The agent is free to
- * adapt or ignore — these are suggestions, not commands.
+ * adapt or ignore. These are suggestions, not commands.
  */
 export interface NextCallSuggestion {
   /** Name of the tool to call next. */

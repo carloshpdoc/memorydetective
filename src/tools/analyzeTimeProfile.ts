@@ -7,6 +7,7 @@ import {
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
+import type { DataStatus } from "../types.js";
 
 export const analyzeTimeProfileSchema = z.object({
   tracePath: z
@@ -44,6 +45,12 @@ export interface AnalyzeTimeProfileResult {
    */
   notice?: string;
   diagnosis: string;
+  /**
+   * Disambiguates empty arrays into "no data in the trace" vs "trace
+   * could not be exported" vs "data was exported partially". Agents
+   * should branch on this rather than `totalSamples === 0`.
+   */
+  status: DataStatus;
 }
 
 /**
@@ -65,6 +72,7 @@ export function analyzeTimeProfileFromXml(
       topSymbols: [],
       topRows: [],
       diagnosis: "No time-profile table found in the export.",
+      status: "not_present",
     };
   }
 
@@ -106,6 +114,7 @@ export function analyzeTimeProfileFromXml(
       rows.length === 0
         ? "No samples found in the time-profile table."
         : `${rows.length} samples; top symbol: ${topSymbols[0]?.symbol ?? "unknown"} (${topSymbols[0]?.samples ?? 0} samples).`,
+    status: "available",
   };
 }
 
@@ -147,6 +156,7 @@ export async function analyzeTimeProfile(
         notice: SIGSEGV_NOTICE,
         diagnosis:
           "Could not export time-profile schema (xctrace crashed). See `notice` for workarounds.",
+        status: "not_exportable",
       };
     }
     throw new Error(

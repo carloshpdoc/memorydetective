@@ -7,6 +7,7 @@ import {
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
+import type { DataStatus } from "../types.js";
 
 export const analyzeAllocationsSchema = z.object({
   tracePath: z
@@ -58,9 +59,14 @@ export interface AnalyzeAllocationsResult {
   };
   /** Top categories by cumulative bytes. */
   topByBytes: AllocationEntry[];
-  /** Top categories by allocation count (different signal — small frequent allocations). */
+  /** Top categories by allocation count (different signal, small frequent allocations). */
   topByCount: AllocationEntry[];
   diagnosis: string;
+  /**
+   * Disambiguates empty arrays into "no data in the trace" vs "trace could
+   * not be exported" vs "data was exported partially". See {@link DataStatus}.
+   */
+  status: DataStatus;
 }
 
 interface RawAllocationRow {
@@ -92,6 +98,7 @@ export function analyzeAllocationsFromXml(
       topByBytes: [],
       topByCount: [],
       diagnosis: "No allocations table found in the trace.",
+      status: "not_present",
     };
   }
 
@@ -192,6 +199,7 @@ export function analyzeAllocationsFromXml(
     topByBytes,
     topByCount,
     diagnosis,
+    status: "available",
   };
 }
 

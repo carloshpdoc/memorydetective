@@ -7,6 +7,7 @@ import {
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
+import type { DataStatus } from "../types.js";
 
 export const analyzeAnimationHitchesSchema = z.object({
   tracePath: z
@@ -59,6 +60,11 @@ export interface AnalyzeAnimationHitchesResult {
   byType: Record<string, number>;
   top: HitchEntry[];
   diagnosis: string;
+  /**
+   * Disambiguates empty arrays into "no data in the trace" vs "trace could
+   * not be exported" vs "data was exported partially". See {@link DataStatus}.
+   */
+  status: DataStatus;
 }
 
 const PERCEPTIBLE_MS = 100;
@@ -86,6 +92,7 @@ export function analyzeAnimationHitchesFromXml(
       byType: {},
       top: [],
       diagnosis: "No animation-hitches table found in the trace.",
+      status: "not_present",
     };
   }
 
@@ -135,6 +142,7 @@ export function analyzeAnimationHitchesFromXml(
     byType,
     top,
     diagnosis,
+    status: "available",
   };
 }
 
