@@ -35,6 +35,10 @@ import {
   maybeLogPlatformAdvisoryOnce,
   type PlatformAdvisory,
 } from "../runtime/platformCheck.js";
+import {
+  getSecurityFlags,
+  ALLOW_LAUNCH_REQUIRED_MESSAGE,
+} from "../runtime/securityFlags.js";
 
 const simulatorSelectorSchema = z.object({
   udid: z.string().optional(),
@@ -128,7 +132,8 @@ export type LaunchState =
   | "installFailed"
   | "launchFailed"
   | "pidNotFound"
-  | "noSimulatorAvailable";
+  | "noSimulatorAvailable"
+  | "launchNotAllowed";
 
 export interface BootAndLaunchForLeakInvestigationResult {
   ok: boolean;
@@ -162,6 +167,25 @@ export async function bootAndLaunchForLeakInvestigation(
 ): Promise<BootAndLaunchForLeakInvestigationResult> {
   const platformAdvisory = getPlatformAdvisory();
   maybeLogPlatformAdvisoryOnce(platformAdvisory);
+  // Security gate: this tool executes xcodebuild + xcrun simctl launch
+  // with caller-supplied paths and bundle ids. Require an explicit
+  // env var opt-in so the operator confirms they trust the agent's
+  // input source. Without it, return a structured failure rather
+  // than throwing, so the agent can surface the message to the user
+  // and continue with read-only tools.
+  const security = getSecurityFlags();
+  if (!security.allowLaunch) {
+    const base: BootAndLaunchForLeakInvestigationResult = {
+      ok: false,
+      state: "launchNotAllowed",
+      appliedEnvVars: { ...DEFAULT_ENV_VARS, ...(input.envVars ?? {}) },
+      steps: [
+        "(gate: MEMORYDETECTIVE_ALLOW_LAUNCH is not set to 1; skipping xcodebuild + simctl)",
+      ],
+      failureReason: ALLOW_LAUNCH_REQUIRED_MESSAGE,
+    };
+    return platformAdvisory ? { ...base, platformAdvisory } : base;
+  }
   const result = await bootAndLaunchForLeakInvestigationImpl(input);
   return platformAdvisory ? { ...result, platformAdvisory } : result;
 }

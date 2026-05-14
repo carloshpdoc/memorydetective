@@ -285,6 +285,9 @@ Copilot's MCP integration moves fast. If this snippet is stale, see the [VS Code
 | Variable | Default | Effect |
 |---|---|---|
 | `MEMORYDETECTIVE_REDACTION` | `balanced` | Output scrubbing applied to every tool response. `balanced` collapses home-directory paths to `~/...` and masks token-shaped secrets (AWS keys, GitHub PATs, Stripe, Slack, Bearer auth). `strict` adds hostname, IPv4, and bundle-identifier masking. `off` disables redaction (useful for local-only debugging). Mode is logged once at server startup. |
+| `MEMORYDETECTIVE_ALLOW_LAUNCH` | unset | Set to `1` to allow `bootAndLaunchForLeakInvestigation`. The tool executes `xcodebuild` and `xcrun simctl launch` against caller-supplied paths and bundle ids, so opt-in is required. Without the var set, the tool returns `ok: false` with `state: launchNotAllowed` and a clear explanation. Set this only when you trust the inputs the agent is producing. |
+| `MEMORYDETECTIVE_MAX_RECORDING_SECONDS` | `300` | Cap on `recordTimeProfile.durationSec`. Requests above the cap are rejected with a clear error. Bounded internally to a 3600s (1h) hard ceiling so a misconfigured env var cannot disable the gate. |
+| `MEMORYDETECTIVE_TRACE_ROOT` | `~/Library/Application Support/memorydetective/traces` | Directory used when `recordTimeProfile.output` is a relative path. Absolute paths bypass this default for v1.8 backwards-compat. Also used by the upcoming `cleanup_traces` tool as the default scan path. The directory is auto-created on first write. |
 | `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY` | unset | Set to `1` to silence the macOS 26.x platform advisory that captureMemgraph, captureScenarioState, and bootAndLaunchForLeakInvestigation emit on first use. Useful once you have an iOS 18 sim runtime installed and do not need the reminder. |
 
 ---

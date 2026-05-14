@@ -1,7 +1,16 @@
 import { z } from "zod";
-import { existsSync } from "node:fs";
-import { resolve as resolvePath, dirname } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import {
+  resolve as resolvePath,
+  dirname,
+  isAbsolute as isAbsolutePath,
+  join as joinPath,
+} from "node:path";
 import { runCommand } from "../runtime/exec.js";
+import {
+  getSecurityFlags,
+  maxRecordingExceededMessage,
+} from "../runtime/securityFlags.js";
 
 /**
  * Base shape, exposed so the MCP layer can read `.shape` (ZodEffects from
@@ -161,10 +170,29 @@ export function buildXctraceArgs(input: RecordTimeProfileInput): string[] {
 export async function recordTimeProfile(
   input: RecordTimeProfileInput,
 ): Promise<RecordTimeProfileResult> {
-  const output = resolvePath(input.output);
+  const security = getSecurityFlags();
+  // Cap the recording duration so an unattended agent does not pile up
+  // multi-GB traces. Default cap is 300s (5 min); override via
+  // MEMORYDETECTIVE_MAX_RECORDING_SECONDS, capped at 3600s.
+  if (input.durationSec > security.maxRecordingSeconds) {
+    throw new Error(
+      maxRecordingExceededMessage(input.durationSec, security.maxRecordingSeconds),
+    );
+  }
+  // Resolve the output path against TRACE_ROOT when relative, so the
+  // default behavior places traces in a predictable location that
+  // cleanup_traces can manage. Absolute paths are preserved verbatim
+  // for backwards compat with v1.8 callers that always passed absolute.
+  const output = isAbsolutePath(input.output)
+    ? resolvePath(input.output)
+    : joinPath(security.traceRoot, input.output);
   const outDir = dirname(output);
   if (!existsSync(outDir)) {
-    throw new Error(`Output directory does not exist: ${outDir}`);
+    // Auto-create the directory for the TRACE_ROOT case so first-time
+    // users do not have to mkdir manually. Same behavior whether the
+    // path came from TRACE_ROOT or was an absolute path to a missing
+    // parent.
+    mkdirSync(outDir, { recursive: true });
   }
   const args = buildXctraceArgs({ ...input, output });
   // External timeout wrapper. xctrace itself receives `--time-limit Ns`, so
