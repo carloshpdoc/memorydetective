@@ -43,7 +43,13 @@ export const analyzeHangsSchema = z.object({
     .record(z.string(), z.string())
     .optional()
     .describe(
-      "Optional supplemental map from a hang's `startNs` (as a string) to the top frame seen during that hang. When provided, each matching hang in `top[]` is enriched with `mainThreadViolations[]` that catalog the kind of work happening on the main thread (sync-io, db-lock, network, lock-contention). Typical pipeline: call `analyzeTimeProfile` separately on the same `.trace`, correlate samples to hang windows by timestamp, then re-call `analyzeHangs` with the resulting map. Omit to skip the enrichment.",
+      "Optional supplemental map from a hang's `startNs` (as a string) to the top frame seen during that hang. When provided, each matching hang in `top[]` is enriched with `mainThreadViolations[]` that catalog the kind of work happening on the main thread (sync-io, db-lock, network, lock-contention). Typical pipeline: call `analyzeTimeProfile` separately on the same `.trace`, correlate samples to hang windows by timestamp, then re-call `analyzeHangs` with the resulting map. Omit to skip the enrichment. SUPERSEDED in v1.12 by `includeStackClassification: true`, which builds this map internally.",
+    ),
+  includeStackClassification: z
+    .boolean()
+    .default(false)
+    .describe(
+      "v1.12+. When true, analyzeHangs internally exports the `time-profile` schema in parallel with `potential-hangs`, correlates samples to hang windows by timestamp, picks the dominant top frame per hang, and runs `classifyHangFrame` on it. The `mainThreadViolations[]` field on each top hang is populated automatically. Replaces the v1.9 caller-built `topFramesByHangStartNs` map: most callers should set this flag instead of building the map manually. Adds a second xctrace export call, run in parallel with the hangs export so wall-clock is unchanged when the trace export succeeds. Falls back gracefully (empty violations, no error) when the time-profile schema is absent or xctrace SIGSEGVs on it.",
     ),
   outputFormat: outputFormatField,
 });
@@ -331,13 +337,73 @@ function buildHangDiagnosis(
   return parts.join(" ");
 }
 
-export async function analyzeHangs(
-  input: AnalyzeHangsInput,
-): Promise<AnalyzeHangsResult> {
-  const tracePath = resolvePath(input.tracePath);
-  if (!existsSync(tracePath)) {
-    throw new Error(`Trace bundle not found: ${tracePath}`);
+/**
+ * Pure: walk parsed time-profile rows + hang entries, correlate samples
+ * to hang windows by timestamp, return a `startNs -> topFrame` map.
+ *
+ * Algorithm: for each hang H with [startNs, startNs+durationNs], find all
+ * samples whose `weight` timestamp falls in that window. Per hang, pick
+ * the top frame by aggregate sample weight (or by sample count if weight
+ * is absent). The result map keys are stringified `startNs` values to
+ * match the existing `topFramesByHangStartNs` shape that v1.9 exposed.
+ *
+ * Returns an empty map when the time-profile rows are absent or none
+ * correlate. Failure modes degrade silently so the cycle-side path
+ * still completes.
+ *
+ * Exposed for testing.
+ */
+export function correlateTimeProfileToHangs(
+  hangs: Array<{ startNs: number; durationNs: number }>,
+  timeProfileRows: Array<{
+    startNs: number;
+    weight?: number;
+    backtrace?: string;
+    topFrame?: string;
+  }>,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (hangs.length === 0 || timeProfileRows.length === 0) return result;
+  for (const hang of hangs) {
+    const windowEnd = hang.startNs + hang.durationNs;
+    // Per-frame aggregate score within this hang's window.
+    const scores = new Map<string, number>();
+    for (const sample of timeProfileRows) {
+      if (sample.startNs < hang.startNs || sample.startNs > windowEnd) continue;
+      const frame =
+        sample.topFrame ??
+        // First non-empty line of backtrace, when topFrame isn't pre-parsed.
+        sample.backtrace?.split(/\r?\n/).find((l) => l.trim().length > 0) ??
+        "";
+      if (!frame) continue;
+      const weight = sample.weight ?? 1;
+      scores.set(frame, (scores.get(frame) ?? 0) + weight);
+    }
+    if (scores.size === 0) continue;
+    // Pick the frame with the highest aggregate score.
+    let topFrame = "";
+    let topScore = -Infinity;
+    for (const [frame, score] of scores) {
+      if (score > topScore) {
+        topScore = score;
+        topFrame = frame;
+      }
+    }
+    if (topFrame) result[hangFrameMapKey(hang.startNs)] = topFrame;
   }
+  return result;
+}
+
+/**
+ * Spawn `xctrace export` for the `time-profile` schema. Non-fatal on
+ * failure: returns an empty array so the caller can degrade gracefully.
+ * Returns parsed rows with at minimum `startNs` + a `topFrame` string.
+ */
+async function captureTimeProfileRows(
+  tracePath: string,
+): Promise<
+  Array<{ startNs: number; weight?: number; topFrame?: string }>
+> {
   const result = await runCommand(
     "xcrun",
     [
@@ -346,21 +412,109 @@ export async function analyzeHangs(
       "--input",
       tracePath,
       "--xpath",
-      '/trace-toc/run/data/table[@schema="potential-hangs"]',
+      '/trace-toc/run/data/table[@schema="time-profile"]',
     ],
     { timeoutMs: 5 * 60_000 },
   );
-  if (result.code !== 0) {
+  if (result.code !== 0) return [];
+  try {
+    const tables = parseXctraceXml(result.stdout);
+    const tp = tables.find((t) => t.schema === "time-profile");
+    if (!tp) return [];
+    const rows: Array<{ startNs: number; weight?: number; topFrame?: string }> =
+      [];
+    for (const row of tp.rows) {
+      const startNs = asNumber(row.start);
+      if (startNs == null) continue;
+      const weight = asNumber(row.weight) ?? undefined;
+      // The "top frame" field name varies (`backtrace`, `top-frame`, etc.).
+      // Pick the first non-empty stringified candidate.
+      const candidates = [
+        asFormatted(row["top-frame"]),
+        asFormatted(row.backtrace),
+        asFormatted(row.symbol),
+        asFormatted(row["leaf-symbol"]),
+      ];
+      const topFrame = candidates.find(
+        (v): v is string => typeof v === "string" && v.length > 0,
+      );
+      rows.push({ startNs, weight, topFrame });
+    }
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+export async function analyzeHangs(
+  input: AnalyzeHangsInput,
+): Promise<AnalyzeHangsResult> {
+  const tracePath = resolvePath(input.tracePath);
+  if (!existsSync(tracePath)) {
+    throw new Error(`Trace bundle not found: ${tracePath}`);
+  }
+  const wantStackClassification = input.includeStackClassification ?? false;
+  const [hangsResult, timeProfileRows] = await Promise.all([
+    runCommand(
+      "xcrun",
+      [
+        "xctrace",
+        "export",
+        "--input",
+        tracePath,
+        "--xpath",
+        '/trace-toc/run/data/table[@schema="potential-hangs"]',
+      ],
+      { timeoutMs: 5 * 60_000 },
+    ),
+    wantStackClassification
+      ? captureTimeProfileRows(tracePath)
+      : Promise.resolve(
+          [] as Array<{
+            startNs: number;
+            weight?: number;
+            topFrame?: string;
+          }>,
+        ),
+  ]);
+  if (hangsResult.code !== 0) {
     throw new Error(
-      `xctrace export failed (code ${result.code}): ${result.stderr || result.stdout}`,
+      `xctrace export failed (code ${hangsResult.code}): ${hangsResult.stderr || hangsResult.stdout}`,
     );
   }
+
+  // Build the supplemental top-frames map. Caller-supplied map takes
+  // precedence over the v1.12 auto-correlation so users who pre-built a
+  // map can override the heuristic. The auto path runs only when the
+  // user didn't supply a map AND opted into stack classification.
+  let topFramesMap = input.topFramesByHangStartNs;
+  if (!topFramesMap && wantStackClassification && timeProfileRows.length > 0) {
+    // Parse the hangs table once to drive correlation; analyzeHangsFromXml
+    // re-parses internally so we get a clean separation between the
+    // correlation step and the final render.
+    const tables = parseXctraceXml(hangsResult.stdout);
+    const hangsTable = tables.find((t) => t.schema === "potential-hangs");
+    if (hangsTable) {
+      const hangsForCorrelation: Array<{ startNs: number; durationNs: number }> =
+        [];
+      for (const row of hangsTable.rows) {
+        const startNs = asNumber(row.start) ?? 0;
+        const durationNs = asNumber(row.duration) ?? 0;
+        hangsForCorrelation.push({ startNs, durationNs });
+      }
+      topFramesMap = correlateTimeProfileToHangs(
+        hangsForCorrelation,
+        timeProfileRows,
+      );
+    }
+  }
+
   return analyzeHangsFromXml(
-    result.stdout,
+    hangsResult.stdout,
     tracePath,
     input.topN ?? 10,
     input.minDurationMs ?? 0,
     input.timeRangeMs,
-    input.topFramesByHangStartNs,
+    topFramesMap,
   );
 }

@@ -316,11 +316,13 @@ export async function compareTracesByPattern(
         tracePath: beforePath,
         topN: 10,
         minDurationMs: input.hangsMinDurationMs ?? 250,
+        includeStackClassification: false,
       }),
       analyzeHangs({
         tracePath: afterPath,
         topN: 10,
         minDurationMs: input.hangsMinDurationMs ?? 250,
+        includeStackClassification: false,
       }),
     ]);
     const cmp = compareHangs(b, a, threshold);

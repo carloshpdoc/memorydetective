@@ -6,6 +6,7 @@ import {
   analyzeHangsFromXml,
   classifyHangFrame,
   hangFrameMapKey,
+  correlateTimeProfileToHangs,
 } from "./analyzeHangs.js";
 import { analyzeTimeProfileFromXml } from "./analyzeTimeProfile.js";
 
@@ -257,5 +258,104 @@ describe("analyzeTimeProfileFromXml", () => {
       symbol: "MyApp.foo()",
       samples: 2,
     });
+  });
+});
+
+describe("correlateTimeProfileToHangs (v1.12)", () => {
+  it("returns empty map when no hangs", () => {
+    const r = correlateTimeProfileToHangs([], [
+      { startNs: 1_000_000, topFrame: "pthread_mutex_lock" },
+    ]);
+    expect(r).toEqual({});
+  });
+
+  it("returns empty map when no time-profile rows", () => {
+    const r = correlateTimeProfileToHangs(
+      [{ startNs: 1_000_000, durationNs: 500_000 }],
+      [],
+    );
+    expect(r).toEqual({});
+  });
+
+  it("correlates a sample falling inside a hang window to that hang", () => {
+    const r = correlateTimeProfileToHangs(
+      [{ startNs: 1_000_000, durationNs: 1_000_000 }],
+      [
+        { startNs: 1_500_000, topFrame: "pthread_mutex_lock", weight: 1 },
+      ],
+    );
+    expect(r).toEqual({
+      "1000000": "pthread_mutex_lock",
+    });
+  });
+
+  it("excludes samples outside the hang window", () => {
+    const r = correlateTimeProfileToHangs(
+      [{ startNs: 1_000_000, durationNs: 500_000 }],
+      [
+        // Sample BEFORE the window starts.
+        { startNs: 500_000, topFrame: "before", weight: 1 },
+        // Sample AFTER the window ends (start + duration = 1.5M).
+        { startNs: 2_000_000, topFrame: "after", weight: 1 },
+      ],
+    );
+    expect(r).toEqual({});
+  });
+
+  it("picks the frame with the highest aggregate weight when multiple samples overlap", () => {
+    const r = correlateTimeProfileToHangs(
+      [{ startNs: 1_000_000, durationNs: 1_000_000 }],
+      [
+        { startNs: 1_100_000, topFrame: "sqlite3_step", weight: 5 },
+        { startNs: 1_200_000, topFrame: "pthread_mutex_lock", weight: 2 },
+        { startNs: 1_500_000, topFrame: "sqlite3_step", weight: 3 },
+      ],
+    );
+    // sqlite3_step total = 8 > pthread_mutex_lock total = 2.
+    expect(r["1000000"]).toBe("sqlite3_step");
+  });
+
+  it("falls back to first backtrace line when topFrame is absent", () => {
+    const r = correlateTimeProfileToHangs(
+      [{ startNs: 1_000_000, durationNs: 500_000 }],
+      [
+        {
+          startNs: 1_200_000,
+          backtrace: "MyApp.foo()\nMyApp.bar()\n",
+          weight: 1,
+        },
+      ],
+    );
+    expect(r["1000000"]).toBe("MyApp.foo()");
+  });
+
+  it("handles multiple hangs independently", () => {
+    const r = correlateTimeProfileToHangs(
+      [
+        { startNs: 1_000_000, durationNs: 500_000 },
+        { startNs: 5_000_000, durationNs: 500_000 },
+      ],
+      [
+        { startNs: 1_200_000, topFrame: "sqlite3_step", weight: 1 },
+        { startNs: 5_200_000, topFrame: "pthread_mutex_lock", weight: 1 },
+      ],
+    );
+    expect(r).toEqual({
+      "1000000": "sqlite3_step",
+      "5000000": "pthread_mutex_lock",
+    });
+  });
+
+  it("uses default weight of 1 when sample.weight is undefined", () => {
+    const r = correlateTimeProfileToHangs(
+      [{ startNs: 1_000_000, durationNs: 1_000_000 }],
+      [
+        { startNs: 1_100_000, topFrame: "winner" },
+        { startNs: 1_200_000, topFrame: "loser" },
+        { startNs: 1_300_000, topFrame: "winner" },
+      ],
+    );
+    // winner counted twice (no weight), loser once. Winner has score 2.
+    expect(r["1000000"]).toBe("winner");
   });
 });
