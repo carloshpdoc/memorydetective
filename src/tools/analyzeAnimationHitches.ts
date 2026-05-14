@@ -27,7 +27,16 @@ export const analyzeAnimationHitchesSchema = z.object({
     .nonnegative()
     .default(0)
     .describe(
-      "Filter out hitches shorter than this duration in milliseconds. Apple categorizes hitches >100ms as user-perceptible — pass 100 to focus on those.",
+      "Filter out hitches shorter than this duration in milliseconds. Apple categorizes hitches >100ms as user-perceptible, pass 100 to focus on those.",
+    ),
+  timeRangeMs: z
+    .object({
+      startMs: z.number().nonnegative(),
+      endMs: z.number().nonnegative(),
+    })
+    .optional()
+    .describe(
+      "Optional time-window filter. Only hitches whose `startNs` falls within `[startMs, endMs]` (milliseconds since recording start) are included. Use this to answer 'what hitches happened during this 5-second user-visible jank window?' without re-recording.",
     ),
 });
 
@@ -75,6 +84,7 @@ export function analyzeAnimationHitchesFromXml(
   tracePath: string,
   topN = 10,
   minDurationMs = 0,
+  timeRangeMs?: { startMs: number; endMs: number },
 ): AnalyzeAnimationHitchesResult {
   const tables = parseXctraceXml(xml);
   const table = tables.find((t) => t.schema === "animation-hitches");
@@ -114,7 +124,16 @@ export function analyzeAnimationHitchesFromXml(
     });
   }
 
-  const filtered = all.filter((e) => e.durationMs >= minDurationMs);
+  const filtered = all.filter((e) => {
+    if (e.durationMs < minDurationMs) return false;
+    if (timeRangeMs) {
+      const startMs = e.startNs / 1_000_000;
+      if (startMs < timeRangeMs.startMs || startMs > timeRangeMs.endMs) {
+        return false;
+      }
+    }
+    return true;
+  });
   const byType: Record<string, number> = {};
   for (const e of filtered) {
     byType[e.hitchType] = (byType[e.hitchType] ?? 0) + 1;
@@ -195,5 +214,6 @@ export async function analyzeAnimationHitches(
     tracePath,
     input.topN ?? 10,
     input.minDurationMs ?? 0,
+    input.timeRangeMs,
   );
 }

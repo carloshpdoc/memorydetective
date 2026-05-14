@@ -72,6 +72,42 @@ describe("analyzeHangsFromXml", () => {
     expect(result.status).toBe("not_present");
     expect(result.totals.rows).toBe(0);
   });
+
+  it("filters hangs to the timeRangeMs window when provided", () => {
+    // Take baseline counts, then run with a window that drops the late hangs.
+    const baseline = analyzeHangsFromXml(hangsXml, "/fake/run.trace", 100, 0);
+    expect(baseline.totals.rows).toBeGreaterThan(0);
+
+    // Use a generous tight window around the FIRST hang's startMs so we keep
+    // at least one entry and exclude later ones. The fixture's first hang
+    // starts within the first ~1s of the trace, others further out.
+    const firstStartMs = baseline.top
+      .slice()
+      .sort((a, b) => a.startNs - b.startNs)[0].startNs / 1_000_000;
+    const windowed = analyzeHangsFromXml(hangsXml, "/fake/run.trace", 100, 0, {
+      startMs: Math.max(0, firstStartMs - 50),
+      endMs: firstStartMs + 100,
+    });
+    expect(windowed.totals.rows).toBeGreaterThan(0);
+    expect(windowed.totals.rows).toBeLessThan(baseline.totals.rows);
+    for (const e of windowed.top) {
+      const startMs = e.startNs / 1_000_000;
+      expect(startMs).toBeGreaterThanOrEqual(firstStartMs - 50);
+      expect(startMs).toBeLessThanOrEqual(firstStartMs + 100);
+    }
+  });
+
+  it("timeRangeMs returning zero rows still reports status=available", () => {
+    // A window far past the recording's data range should empty the result
+    // but status stays available (the trace was readable, just nothing in
+    // this window). Different from not_present.
+    const windowed = analyzeHangsFromXml(hangsXml, "/fake/run.trace", 100, 0, {
+      startMs: 10_000_000,
+      endMs: 11_000_000,
+    });
+    expect(windowed.totals.rows).toBe(0);
+    expect(windowed.status).toBe("available");
+  });
 });
 
 describe("analyzeTimeProfileFromXml", () => {

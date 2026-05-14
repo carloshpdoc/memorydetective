@@ -27,7 +27,16 @@ export const analyzeHangsSchema = z.object({
     .nonnegative()
     .default(0)
     .describe(
-      "Filter out hangs shorter than this duration in milliseconds (default 0 — include all). Use 250 to focus on \"real\" hangs only.",
+      "Filter out hangs shorter than this duration in milliseconds (default 0, include all). Use 250 to focus on 'real' hangs only.",
+    ),
+  timeRangeMs: z
+    .object({
+      startMs: z.number().nonnegative(),
+      endMs: z.number().nonnegative(),
+    })
+    .optional()
+    .describe(
+      "Optional time-window filter. Only hangs whose `startNs` falls within `[startMs, endMs]` (milliseconds since recording start) are included. Use this to answer 'what hangs happened between t=2s and t=7s?' without re-recording.",
     ),
 });
 
@@ -69,6 +78,7 @@ export function analyzeHangsFromXml(
   tracePath: string,
   topN = 10,
   minDurationMs = 0,
+  timeRangeMs?: { startMs: number; endMs: number },
 ): AnalyzeHangsResult {
   const tables = parseXctraceXml(xml);
   const hangsTable = tables.find((t) => t.schema === "potential-hangs");
@@ -104,7 +114,16 @@ export function analyzeHangsFromXml(
     });
   }
 
-  const filtered = allEntries.filter((e) => e.durationMs >= minDurationMs);
+  const filtered = allEntries.filter((e) => {
+    if (e.durationMs < minDurationMs) return false;
+    if (timeRangeMs) {
+      const startMs = e.startNs / 1_000_000;
+      if (startMs < timeRangeMs.startMs || startMs > timeRangeMs.endMs) {
+        return false;
+      }
+    }
+    return true;
+  });
   const hangs = filtered.filter((e) => e.hangType === "Hang");
   const microhangs = filtered.filter((e) => e.hangType === "Microhang");
   const totalDurationMs = filtered.reduce((sum, e) => sum + e.durationMs, 0);
@@ -193,5 +212,6 @@ export async function analyzeHangs(
     tracePath,
     input.topN ?? 10,
     input.minDurationMs ?? 0,
+    input.timeRangeMs,
   );
 }
