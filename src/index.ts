@@ -37,6 +37,10 @@ import {
   listTraceTemplatesSchema,
 } from "./tools/listTraceTemplates.js";
 import {
+  inspectTrace,
+  inspectTraceSchema,
+} from "./tools/inspectTrace.js";
+import {
   recordTimeProfile,
   recordTimeProfileShape,
 } from "./tools/recordTimeProfile.js";
@@ -320,6 +324,22 @@ server.registerTool(
   },
   async (input) => {
     const result = await listTraceTemplates(input);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  },
+);
+
+server.registerTool(
+  "inspectTrace",
+  {
+    title: "Inspect a .trace bundle's TOC + suggest analyzers",
+    description:
+      "[mg.discover] Single-call orientation tool for `.trace` bundles. Runs `xcrun xctrace export --xpath '/trace-toc/run'` and returns the schemas present (potential-hangs, animation-hitches, time-profile, allocations, app-launch, ...), their row counts, the device model, the OS version, the template name, the recording timestamp, and a `suggestedNextCalls[]` array mapping each populated schema to its matching `analyze*` tool with pre-populated args. Use this as the FIRST call when handed a `.trace` so you do not have to chain 5 analyzers blindly. Empty traces return `schemas: []` with a diagnosis pointing at Instruments.app for manual triage. Fallback path: when `/trace-toc/run` returns non-zero, retries with `/trace-toc` (older xctrace versions).",
+    inputSchema: inspectTraceSchema.shape,
+  },
+  async (input) => {
+    const result = await inspectTrace(input);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
