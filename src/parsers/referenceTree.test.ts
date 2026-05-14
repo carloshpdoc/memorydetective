@@ -243,6 +243,20 @@ describe("isFrameworkNoise", () => {
     expect(isFrameworkNoise("<NSMutableDictionary 0xabcd> [32]")).toBe(true);
   });
 
+  it("flags `N bytes into <X 0xADDR>` heap offsets (v1.12)", () => {
+    // These appear when leaks reports partial allocations as their own
+    // rows. They scale with Swift runtime + class-table loading, not
+    // user code, and should not contribute to verifyFix verdicts.
+    expect(
+      isFrameworkNoise("8600 bytes into <Swift Metadata 0x156865400> [16896]"),
+    ).toBe(true);
+    expect(
+      isFrameworkNoise(
+        "4640 bytes into <malloc in addClassTableEntry(objc_class*, bool) 0x310008000> [65536]",
+      ),
+    ).toBe(true);
+  });
+
   it("does NOT flag actionable AV / KVO / SwiftUI classes", () => {
     expect(isFrameworkNoise("AVPlayerItem")).toBe(false);
     expect(isFrameworkNoise("AVPlayerInternal")).toBe(false);

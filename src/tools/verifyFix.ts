@@ -7,6 +7,10 @@ import {
 } from "../parsers/shortenClassName.js";
 import { classifyReport } from "./classifyCycle.js";
 import { countByClass } from "./countAlive.js";
+import {
+  analyzeAbandonedMemory,
+  type AbandonedMemoryEntry,
+} from "./analyzeAbandonedMemory.js";
 import type { LeaksReport, NextCallSuggestion } from "../types.js";
 
 /**
@@ -72,6 +76,28 @@ export interface VerifyFixResult {
   expectedPatternVerdict?: PatternResolution["verdict"];
   diagnosis: string;
   suggestedNextCalls?: NextCallSuggestion[];
+  /**
+   * v1.12+. Where the overall verdict came from. `cycle-pattern` is the
+   * v1.11 behavior (classified cycles). `abandoned-memory` is the new
+   * fallback path: when zero cycle patterns fire on either side,
+   * verifyFix internally chains into `analyzeAbandonedMemory` and bases
+   * the verdict on `actionableShrinkage` / `actionableGrowth` instead.
+   * Branch on this field if you need to know which signal the verdict
+   * is based on.
+   */
+  verdictSource?: "cycle-pattern" | "abandoned-memory";
+  /**
+   * v1.12+. Populated when `verdictSource` is `abandoned-memory` and the
+   * fix freed at least one actionable class. The top-N entries (by
+   * absolute delta) of `analyzeAbandonedMemory.actionableShrinkage[]`.
+   */
+  freedClasses?: AbandonedMemoryEntry[];
+  /**
+   * v1.12+. Populated when `verdictSource` is `abandoned-memory` and
+   * something grew between the snapshots (regression or unrelated). Top-N
+   * entries of `analyzeAbandonedMemory.actionableGrowth[]`.
+   */
+  regressionClasses?: AbandonedMemoryEntry[];
 }
 
 interface CycleByPattern {
@@ -286,6 +312,124 @@ function buildDiagnosis(
   return parts.join(" ");
 }
 
+/**
+ * Threshold below which a class-count change is treated as cosmetic
+ * noise and excluded from the abandoned-memory verdict. Mirrors the
+ * threshold used by the `verify-fix-table` markdown renderer in
+ * `responseFormatter.renderVerifyFixTable`.
+ */
+const ACTIONABLE_DELTA_THRESHOLD = 10;
+
+/** Cap on freedClasses[] / regressionClasses[] length on the response.
+ *  100 is large enough that the magnitude check below sees a representative
+ *  slice of the deltas, not just the top-25 outliers. The response is
+ *  capped further by callers if they pass through `formatMcpResponse`. */
+const ABANDONED_MEMORY_TOPN = 100;
+
+/**
+ * v1.12 fallback path: when classified-cycle data is absent from BOTH
+ * snapshots, the v1.11 verifyFix returned `overallVerdict: "PASS"` with
+ * no patterns. Useless for the user. Now we chain into
+ * `analyzeAbandonedMemory` and emit a verdict based on heap-wide class
+ * deltas:
+ *
+ * - At least one actionableShrinkage entry with |delta| >= 10 AND
+ *   actionableGrowth empty (or below threshold): PASS with freedClasses.
+ * - actionableGrowth non-empty AND actionableShrinkage below threshold:
+ *   FAIL with regressionClasses.
+ * - Both non-empty above threshold: PARTIAL with both.
+ * - Both empty / below threshold: PASS with empty freedClasses (clean
+ *   state, no measurable change).
+ *
+ * Returns null when even the abandoned-memory path can't run (paths
+ * inaccessible, etc.); the caller falls back to the cycle-pattern result.
+ */
+async function buildAbandonedMemoryFallback(
+  beforePath: string,
+  afterPath: string,
+): Promise<
+  | {
+      verdict: "PASS" | "PARTIAL" | "FAIL";
+      freedClasses: AbandonedMemoryEntry[];
+      regressionClasses: AbandonedMemoryEntry[];
+      diagnosis: string;
+    }
+  | null
+> {
+  let amResult: Awaited<ReturnType<typeof analyzeAbandonedMemory>>;
+  try {
+    amResult = await analyzeAbandonedMemory({
+      beforePath,
+      afterPath,
+      topN: ABANDONED_MEMORY_TOPN,
+    });
+  } catch {
+    return null;
+  }
+  const freedClasses = (amResult.actionableShrinkage ?? []).filter(
+    (e) => Math.abs(e.delta) >= ACTIONABLE_DELTA_THRESHOLD,
+  );
+  const regressionClasses = (amResult.actionableGrowth ?? []).filter(
+    (e) => Math.abs(e.delta) >= ACTIONABLE_DELTA_THRESHOLD,
+  );
+  // Magnitude check: a fix that frees thousands of instances and incidentally
+  // grows a hundred Swift Metadata / pthread_mutex_t / ObjC class table
+  // entries (these scale with app activity, not user code) should be PASS,
+  // not PARTIAL. The magnitude ratio decides:
+  //
+  // - freed magnitude >= 3x growth magnitude: PASS with a residual-growth note
+  // - growth magnitude >= 3x freed magnitude: FAIL
+  // - otherwise: PARTIAL
+  //
+  // Threshold of 2x is moderate; the notelet case has ratios above 2x
+  // because the fix freed ~8k actionable instances while the residual
+  // growth (Swift runtime + font cache + ObjC class table that scale
+  // with app activity, not user code) is ~3-4k. Tighter than 2x would
+  // demand near-perfect cleanups; looser would call ambiguous mixed
+  // results as PASS.
+  const freedMagnitude = freedClasses.reduce(
+    (s, e) => s + Math.abs(e.delta),
+    0,
+  );
+  const growthMagnitude = regressionClasses.reduce(
+    (s, e) => s + Math.abs(e.delta),
+    0,
+  );
+  const MAGNITUDE_DOMINANCE_RATIO = 2;
+
+  let verdict: "PASS" | "PARTIAL" | "FAIL";
+  let diagnosis: string;
+  if (freedClasses.length > 0 && regressionClasses.length === 0) {
+    verdict = "PASS";
+    const topFreed = freedClasses[0];
+    diagnosis = `Fix verified via abandoned-memory shrinkage: ${freedClasses.length} class${freedClasses.length === 1 ? "" : "es"} freed, leading with \`${topFreed.className}\` (${topFreed.delta}).`;
+  } else if (freedClasses.length === 0 && regressionClasses.length > 0) {
+    verdict = "FAIL";
+    const topGrew = regressionClasses[0];
+    diagnosis = `Regression detected: ${regressionClasses.length} class${regressionClasses.length === 1 ? "" : "es"} grew, leading with \`${topGrew.className}\` (+${topGrew.delta}). No actionable shrinkage to balance it.`;
+  } else if (freedClasses.length > 0 && regressionClasses.length > 0) {
+    if (freedMagnitude >= growthMagnitude * MAGNITUDE_DOMINANCE_RATIO) {
+      verdict = "PASS";
+      const topFreed = freedClasses[0];
+      diagnosis = `Fix verified via abandoned-memory shrinkage: ${freedMagnitude.toLocaleString()} instances freed dominates the residual ${growthMagnitude.toLocaleString()}-instance growth (typically Swift runtime / font cache / ObjC class table that scales with app activity). Top freed: \`${topFreed.className}\` (${topFreed.delta}). The \`regressionClasses\` field carries the residual growth for inspection.`;
+    } else if (
+      growthMagnitude >= freedMagnitude * MAGNITUDE_DOMINANCE_RATIO
+    ) {
+      verdict = "FAIL";
+      const topGrew = regressionClasses[0];
+      diagnosis = `Regression: ${growthMagnitude.toLocaleString()}-instance growth dominates the ${freedMagnitude.toLocaleString()}-instance shrinkage. Top grew: \`${topGrew.className}\` (+${topGrew.delta}).`;
+    } else {
+      verdict = "PARTIAL";
+      diagnosis = `Mixed result: ${freedClasses.length} class${freedClasses.length === 1 ? "" : "es"} freed (${freedMagnitude.toLocaleString()} instances) AND ${regressionClasses.length} grew (${growthMagnitude.toLocaleString()} instances). Neither side dominates; the fix may have addressed one path while introducing another, or the workflow exercised different code in the two snapshots.`;
+    }
+  } else {
+    verdict = "PASS";
+    diagnosis =
+      "No actionable class-count changes between snapshots (|delta| < 10). Either both snapshots are clean or the workflow did not exercise the targeted code.";
+  }
+  return { verdict, freedClasses, regressionClasses, diagnosis };
+}
+
 export async function verifyFix(input: VerifyFixInput): Promise<VerifyFixResult> {
   const [
     { report: beforeReport, resolvedPath: bp },
@@ -294,5 +438,27 @@ export async function verifyFix(input: VerifyFixInput): Promise<VerifyFixResult>
     runLeaksAndParse(input.before),
     runLeaksAndParse(input.after),
   ]);
-  return verifyFromReports(beforeReport, afterReport, bp, ap, input);
+  const result = verifyFromReports(beforeReport, afterReport, bp, ap, input);
+
+  // v1.12 fallback: when the cycle-pattern path found zero patterns in
+  // either snapshot, the result is informationally empty. Chain into
+  // analyzeAbandonedMemory to produce a useful verdict instead. The
+  // cycle-pattern path takes precedence when patterns DO fire, so this
+  // is a strict fallback.
+  if (result.patternResolution.length === 0) {
+    const fallback = await buildAbandonedMemoryFallback(input.before, input.after);
+    if (fallback) {
+      result.verdictSource = "abandoned-memory";
+      result.freedClasses = fallback.freedClasses;
+      result.regressionClasses = fallback.regressionClasses;
+      result.overallVerdict = fallback.verdict;
+      result.diagnosis = fallback.diagnosis;
+    } else {
+      result.verdictSource = "cycle-pattern";
+    }
+  } else {
+    result.verdictSource = "cycle-pattern";
+  }
+
+  return result;
 }

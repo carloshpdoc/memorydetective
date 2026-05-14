@@ -237,6 +237,10 @@ export function isFrameworkNoise(className: string): boolean {
   // Anonymous bracketed instances that still leaked through (extractClassName
   // missed them, e.g. closures with no class name).
   if (/^<[^>]*0x[0-9a-fA-F]+>/.test(className)) return true;
+  // "N bytes into <SomeClass 0xADDR> [size]" form. These are heap offsets,
+  // not class instances; they represent partial allocations and scale with
+  // app activity (Swift runtime growing, ObjC class table loading, etc.).
+  if (/^\d+ bytes into\b/.test(className)) return true;
   // Foundation observer registry internals (these grow with KVO activity but
   // are not the actionable site; the user's class is what to fix).
   if (className === "CFXNotificationRegistrar") return true;
