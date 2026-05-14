@@ -116,6 +116,10 @@ import {
 } from "./runtime/resources.js";
 import { PROMPTS, findPrompt } from "./runtime/prompts.js";
 import { formatMcpResponse } from "./runtime/responseFormatter.js";
+import {
+  getRedactionMode,
+  maybeLogRedactionModeOnce,
+} from "./runtime/redact.js";
 import { z } from "zod";
 
 const SERVER_NAME = "memorydetective";
@@ -686,6 +690,10 @@ async function main() {
     const code = await runCli(process.argv.slice(2));
     process.exit(code);
   }
+  // One-time startup banner: redaction mode applied to every response.
+  // Operators running `off` see a stderr line confirming responses are
+  // unfiltered, so a session in a screen-share won't accidentally leak.
+  maybeLogRedactionModeOnce(getRedactionMode());
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

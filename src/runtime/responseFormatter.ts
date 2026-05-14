@@ -19,6 +19,7 @@
  */
 
 import { z } from "zod";
+import { getRedactionMode, redact } from "./redact.js";
 
 export const outputFormatField = z
   .enum(["markdown", "json", "both"])
@@ -57,11 +58,17 @@ export function formatMcpResponse(
   format: OutputFormat | undefined,
 ): McpResponse {
   const mode: OutputFormat = format ?? "json";
-  const json = JSON.stringify(result, null, 2);
+  // Redaction happens at the structured-value level so both the JSON
+  // and the markdown views are scrubbed consistently. `off` short-circuits
+  // and returns the input unchanged; `balanced` (default) masks home-dir
+  // paths and common secret-shaped tokens; `strict` also masks hostnames,
+  // IPs, and bundle identifiers. See src/runtime/redact.ts.
+  const redacted = redact(result, getRedactionMode());
+  const json = JSON.stringify(redacted, null, 2);
   if (mode === "json") {
     return { content: [{ type: "text", text: json }] };
   }
-  const markdown = renderAsMarkdown(result, toolName);
+  const markdown = renderAsMarkdown(redacted, toolName);
   if (mode === "markdown") {
     return { content: [{ type: "text", text: markdown }] };
   }

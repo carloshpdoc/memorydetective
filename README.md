@@ -282,9 +282,10 @@ Copilot's MCP integration moves fast. If this snippet is stale, see the [VS Code
 
 ### Environment variables
 
-| Variable | Effect |
-|---|---|
-| `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1` | Silence the macOS 26.x platform advisory that captureMemgraph, captureScenarioState, and bootAndLaunchForLeakInvestigation emit on first use. Useful once you have an iOS 18 sim runtime installed and do not need the reminder. |
+| Variable | Default | Effect |
+|---|---|---|
+| `MEMORYDETECTIVE_REDACTION` | `balanced` | Output scrubbing applied to every tool response. `balanced` collapses home-directory paths to `~/...` and masks token-shaped secrets (AWS keys, GitHub PATs, Stripe, Slack, Bearer auth). `strict` adds hostname, IPv4, and bundle-identifier masking. `off` disables redaction (useful for local-only debugging). Mode is logged once at server startup. |
+| `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY` | unset | Set to `1` to silence the macOS 26.x platform advisory that captureMemgraph, captureScenarioState, and bootAndLaunchForLeakInvestigation emit on first use. Useful once you have an iOS 18 sim runtime installed and do not need the reminder. |
 
 ---
 
