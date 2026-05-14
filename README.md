@@ -356,12 +356,58 @@ These three tools combine into a single deterministic verify-fix loop: launch th
 |---|---|
 | `renderCycleGraph` | Read a `.memgraph`, pick a ROOT CYCLE, and emit a Mermaid graph (markdown-embeddable) or Graphviz DOT. App-level classes highlighted in red; CYCLE BACK terminators amber. |
 
-### CI / test integration (2)
+### CI / test integration (3)
 
 | Tool | What |
 |---|---|
-| `detectLeaksInXCUITest` | **Experimental.** Build the workspace for testing, run the named XCUITest, capture `.memgraph` baseline + after, diff. Returns `passed: false` when new ROOT CYCLEs appear that aren't in the user's allowlist. CI-runnable. |
+| `detectLeaksInXCTest` | Build the unit-test scheme, run with an optional `-only-testing:` filter, capture `.memgraph` baseline + after against the `xctest` runner (or a custom `processName` for app-hosted bundles), diff. Returns `passed: false` when new ROOT CYCLEs appear that aren't in the user's allowlist. Set `outputHtmlPath` to also write a self-contained HTML report. CI-runnable. |
+| `detectLeaksInXCUITest` | XCUITest sibling: build the workspace, run the named XCUITest, capture `.memgraph` baseline + after against the host app, diff. Returns `passed: false` when new ROOT CYCLEs appear that aren't in the user's allowlist. Set `outputHtmlPath` to also write a self-contained HTML report. CI-runnable. |
 | `compareTracesByPattern` | Trace-side counterpart to `verifyFix`. Compares two `.trace` bundles for a perf category (`hangs`, `animation-hitches`, or `app-launch`) and returns PASS/PARTIAL/FAIL with before/after stats and deltas. Apply thresholds: hangs PASS when longest is below `hangsMaxLongestMs`; hitches PASS when longest is below `hitchesMaxLongestMs` (default 100ms. Apple's user-perceptible threshold); app-launch PASS when total is below `appLaunchMaxTotalMs` (default 1000ms). |
+
+#### Add memorydetective to your CI in 5 minutes
+
+`detectLeaksInXCTest` + `outputHtmlPath` are the building blocks for a per-PR leak gate. The job below runs the named unit-test scheme on every push and PR, uploads the HTML report as a workflow artifact, and fails when new ROOT CYCLEs appear outside the allowlist. Copy the file into `.github/workflows/leaks.yml` and adjust the workspace + scheme + test identifier:
+
+```yaml
+name: leaks
+on: [push, pull_request]
+jobs:
+  detect-leaks:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - run: npm install -g memorydetective
+      - run: |
+          xcrun simctl boot "iPhone 15" || true
+          xcrun simctl bootstatus "iPhone 15" -b
+      - run: |
+          cat > leaks.json <<EOF
+          {
+            "workspace": "DemoApp.xcworkspace",
+            "scheme": "DemoAppTests",
+            "destination": "platform=iOS Simulator,name=iPhone 15,OS=18.0",
+            "testCaseFilter": "DemoTests/LeakSensitiveCase",
+            "outputHtmlPath": "${GITHUB_WORKSPACE}/leak-report.html",
+            "allowlistPatterns": ["SwiftUI", "_TtC"]
+          }
+          EOF
+          memorydetective tool detectLeaksInXCTest --input leaks.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: leak-report
+          path: leak-report.html
+          retention-days: 14
+```
+
+The same file is in [`examples/ci/github-actions-leaks.yml`](examples/ci/github-actions-leaks.yml) if you want to copy it verbatim. Notes:
+
+- **Simulator runtime:** pin to iOS 18 on `macos-14` runners. The macOS 26.x kernel regression (`task_for_pid`) breaks `leaks` against iOS 26 sims; iOS 18 is the canonical escape hatch (see the Highlights callout above).
+- **Allowlist patterns:** substrings matched against the leaking ROOT CYCLE's root class. Use them to mask known pre-existing leaks while you work the backlog. `_TtC` covers Swift mangled class prefixes that occasionally show up in SwiftUI internals.
+- **HTML artifact:** the report is self-contained (inline CSS, no external assets), so PR-comment bots and reviewers can preview it directly from the artifact URL.
+- **Build cache:** add `actions/cache@v4` keyed on `Package.resolved` + `*.xcconfig` to skip `build-for-testing` rebuilds across runs. Then pass `--skipBuild` to the second invocation when chaining multiple `detectLeaksInXCTest` calls on the same job.
 
 ### Swift source bridging (5)
 

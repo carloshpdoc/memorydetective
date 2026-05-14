@@ -83,6 +83,10 @@ import {
   detectLeaksInXCUITestSchema,
 } from "./tools/detectLeaksInXCUITest.js";
 import {
+  detectLeaksInXCTest,
+  detectLeaksInXCTestSchema,
+} from "./tools/detectLeaksInXCTest.js";
+import {
   reachableFromCycle,
   reachableFromCycleSchema,
 } from "./tools/reachableFromCycle.js";
@@ -495,11 +499,25 @@ server.registerTool(
   {
     title: "Run an XCUITest with leak detection (CI-runnable)",
     description:
-      "[mg.ci] Build the workspace for testing, launch the test cycle, capture a baseline `.memgraph` once the app appears, run the test to completion, capture an after `.memgraph`, and diff. Returns `passed: false` when new ROOT CYCLE blocks appear that aren't in the `allowlistPatterns` list. Designed for CI gating — non-zero exit code on failure.",
+      "[mg.ci] Build the workspace for testing, launch the test cycle, capture a baseline `.memgraph` once the app appears, run the test to completion, capture an after `.memgraph`, and diff. Returns `passed: false` when new ROOT CYCLE blocks appear that aren't in the `allowlistPatterns` list. Designed for CI gating: non-zero exit code on failure.",
     inputSchema: detectLeaksInXCUITestSchema.shape,
   },
   async (input) => {
     const result = await detectLeaksInXCUITest(input);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.registerTool(
+  "detectLeaksInXCTest",
+  {
+    title: "Run an XCTest unit-test bundle with leak detection (CI-runnable)",
+    description:
+      "[mg.ci] Sibling to `detectLeaksInXCUITest`, targeting XCTest unit-test schemes. Build for testing, launch the test bundle with an optional `-only-testing:<TestTarget>/<TestClass>[/<testMethod>]` filter, poll for the runner process (`xctest` by default, configurable via `processName` for app-hosted test bundles), capture a baseline `.memgraph` once the runner appears, run the test to completion, capture an after `.memgraph`, and diff. Returns `passed: false` when new ROOT CYCLE blocks appear that are not in the `allowlistPatterns` list. Per-test granularity: call once per test method with different `testCaseFilter` values; aggregation is the caller's responsibility, keeping the response tied to a single, well-defined before/after pair. If the runner exits before the after-capture window (common for fast unit tests with no host), the response carries an explicit `failureReason` pointing at the `tearDown` workaround. Designed for CI gating: non-zero exit code on failure.",
+    inputSchema: detectLeaksInXCTestSchema._def.schema.shape,
+  },
+  async (input) => {
+    const result = await detectLeaksInXCTest(input);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   },
 );

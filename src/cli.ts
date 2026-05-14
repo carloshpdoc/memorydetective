@@ -11,11 +11,19 @@
  *   memorydetective --version
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { analyzeMemgraph } from "./tools/analyzeMemgraph.js";
 import { classifyCycle } from "./tools/classifyCycle.js";
+import {
+  detectLeaksInXCTest,
+  detectLeaksInXCTestSchema,
+} from "./tools/detectLeaksInXCTest.js";
+import {
+  detectLeaksInXCUITest,
+  detectLeaksInXCUITestSchema,
+} from "./tools/detectLeaksInXCUITest.js";
 import { VERSION } from "./version.js";
 
 const C = {
@@ -29,17 +37,33 @@ const C = {
   gray: "\x1b[90m",
 };
 
-const HELP = `${C.bold}memorydetective${C.reset} — iOS leak hunting from the CLI
+const HELP = `${C.bold}memorydetective${C.reset}: iOS leak hunting from the CLI
 
 ${C.dim}Usage:${C.reset}
   memorydetective analyze   <path-to-.memgraph> [--json]
   memorydetective classify  <path-to-.memgraph> [--json]
+  memorydetective tool      <toolName> --input <json-path>
   memorydetective --help                           Show this message
   memorydetective --version                        Print version
 
 ${C.dim}Flags:${C.reset}
   --json    Emit machine-readable JSON instead of formatted output.
             Useful for CI scripts and piping into jq.
+
+${C.dim}Tool subcommand:${C.reset}
+  Dispatches to any MCP tool by name, reading its input from a JSON
+  file. Exit code is 0 when the tool returns ok && passed !== false,
+  1 otherwise. Designed for CI gating.
+
+  Supported tool names:
+    detectLeaksInXCTest
+    detectLeaksInXCUITest
+
+  Example:
+    cat > input.json <<EOF
+    { "workspace": "App.xcworkspace", "scheme": "AppTests", "destination": "platform=iOS Simulator,name=iPhone 15" }
+    EOF
+    memorydetective tool detectLeaksInXCTest --input input.json
 
 ${C.dim}When called with no arguments, memorydetective starts as an MCP server${C.reset}
 ${C.dim}over stdio. See https://github.com/carloshpdoc/memorydetective#configure${C.reset}
@@ -83,7 +107,107 @@ function maybeShowFirstRunBanner(): void {
 
 const DIAGNOSIS_FOOTER = `${C.dim}# Found this useful? ⭐ https://github.com/carloshpdoc/memorydetective${C.reset}`;
 
-const KNOWN_COMMANDS = ["analyze", "classify", "--help", "-h", "help", "--version", "-v"];
+const KNOWN_COMMANDS = ["analyze", "classify", "tool", "--help", "-h", "help", "--version", "-v"];
+
+/**
+ * Generic-tool dispatch table. Keyed by tool name, returning a parse
+ * function (so the CLI surfaces schema errors directly) and an async tool
+ * function. Adding more tools later is one line.
+ */
+const TOOL_HANDLERS: Record<
+  string,
+  {
+    parse: (raw: unknown) => unknown;
+    run: (input: never) => Promise<{ passed?: boolean; ok?: boolean }>;
+  }
+> = {
+  detectLeaksInXCTest: {
+    parse: (raw) => detectLeaksInXCTestSchema.parse(raw),
+    run: (input) => detectLeaksInXCTest(input),
+  },
+  detectLeaksInXCUITest: {
+    parse: (raw) => detectLeaksInXCUITestSchema.parse(raw),
+    run: (input) => detectLeaksInXCUITest(input),
+  },
+};
+
+interface ToolArgs {
+  toolName?: string;
+  inputPath?: string;
+  unknownFlags: string[];
+}
+
+function parseToolArgs(rest: string[]): ToolArgs {
+  const out: ToolArgs = { unknownFlags: [] };
+  let i = 0;
+  while (i < rest.length) {
+    const arg = rest[i];
+    if (arg === "--input") {
+      out.inputPath = rest[i + 1];
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith("--")) {
+      out.unknownFlags.push(arg);
+      i += 1;
+      continue;
+    }
+    if (!out.toolName) {
+      out.toolName = arg;
+    } else {
+      out.unknownFlags.push(arg);
+    }
+    i += 1;
+  }
+  return out;
+}
+
+async function runTool(rest: string[]): Promise<number> {
+  const parsed = parseToolArgs(rest);
+  if (parsed.unknownFlags.length > 0) {
+    console.error(
+      `${C.red}error:${C.reset} unknown flag(s): ${parsed.unknownFlags.join(", ")}`,
+    );
+    return 2;
+  }
+  if (!parsed.toolName) {
+    console.error(`${C.red}error:${C.reset} \`tool\` requires a tool name (e.g. \`detectLeaksInXCTest\`)`);
+    return 2;
+  }
+  if (!parsed.inputPath) {
+    console.error(
+      `${C.red}error:${C.reset} \`tool\` requires \`--input <path>\` pointing at a JSON file with the tool inputs`,
+    );
+    return 2;
+  }
+  const handler = TOOL_HANDLERS[parsed.toolName];
+  if (!handler) {
+    console.error(
+      `${C.red}error:${C.reset} unknown tool: ${parsed.toolName}. Supported: ${Object.keys(TOOL_HANDLERS).join(", ")}`,
+    );
+    return 2;
+  }
+  const inputAbs = resolvePath(parsed.inputPath);
+  if (!existsSync(inputAbs)) {
+    console.error(`${C.red}error:${C.reset} input file not found: ${inputAbs}`);
+    return 2;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(inputAbs, "utf8"));
+  } catch (err) {
+    console.error(
+      `${C.red}error:${C.reset} failed to parse ${inputAbs} as JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 2;
+  }
+  const validated = handler.parse(raw) as never;
+  const result = await handler.run(validated);
+  process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  if (result.ok === false) return 1;
+  if (result.passed === false) return 1;
+  return 0;
+}
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
@@ -325,6 +449,9 @@ export async function runCli(args: string[]): Promise<number> {
           return 2;
         }
         return await runClassify(parsed.path, parsed.json);
+      }
+      case "tool": {
+        return await runTool(rest);
       }
       default: {
         const suggestion = suggestCommand(cmd ?? "");

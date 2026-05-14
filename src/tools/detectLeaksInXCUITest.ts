@@ -6,6 +6,7 @@ import { runLeaksAndParse } from "../runtime/leaks.js";
 import { resolveAppNameToPid } from "./captureMemgraph.js";
 import { rootCyclesOnly } from "../parsers/leaksOutput.js";
 import { diffReports } from "./diffMemgraphs.js";
+import { writeLeakReportHtml } from "../runtime/leakReport.js";
 import type { LeaksReport } from "../types.js";
 
 /**
@@ -69,6 +70,12 @@ export const detectLeaksInXCUITestSchema = z.object({
     .describe(
       "Skip the build-for-testing step (faster on CI when the build is already cached).",
     ),
+  outputHtmlPath: z
+    .string()
+    .optional()
+    .describe(
+      "Absolute path to write a self-contained HTML report (inline CSS, no external assets). When set, the response also gains an `htmlReportPath` field pointing at the same file. Designed for CI artifact upload + PR-comment attachment.",
+    ),
 });
 
 export type DetectLeaksInXCUITestInput = z.infer<
@@ -95,6 +102,8 @@ export interface XCUITestLeakResult {
   }>;
   failureReason?: string;
   steps: string[];
+  /** Absolute path to the rendered HTML report when `outputHtmlPath` was set. */
+  htmlReportPath?: string;
 }
 
 async function captureMemgraphForApp(
@@ -133,6 +142,31 @@ async function runXcodebuild(
 
 function isAllowlisted(rootClass: string, patterns: string[]): boolean {
   return patterns.some((p) => rootClass.includes(p));
+}
+
+function attachHtmlReportIfRequested(
+  result: XCUITestLeakResult,
+  outputHtmlPath: string | undefined,
+  schemeLabel: string,
+): XCUITestLeakResult {
+  if (!outputHtmlPath) return result;
+  const path = writeLeakReportHtml(outputHtmlPath, {
+    title: `Leak report: ${schemeLabel}`,
+    subtitle: `Test: ${result.testIdentifier}`,
+    sections: [
+      {
+        title: result.testIdentifier,
+        passed: result.passed,
+        failureReason: result.failureReason,
+        baselineMemgraph: result.baselineMemgraph || undefined,
+        afterMemgraph: result.afterMemgraph || undefined,
+        totals: result.totals,
+        newCycles: result.newCycles,
+        steps: result.steps,
+      },
+    ],
+  });
+  return { ...result, htmlReportPath: path };
 }
 
 export async function detectLeaksInXCUITest(
@@ -256,22 +290,26 @@ export async function detectLeaksInXCUITest(
   }
 
   if (!afterCaptured) {
-    return {
-      ok: false,
-      passed: false,
-      baselineMemgraph: baselinePath,
-      afterMemgraph: "",
-      testIdentifier: input.testIdentifier,
-      totals: {
-        baselineLeaks: 0,
-        afterLeaks: 0,
-        leakDelta: 0,
+    return attachHtmlReportIfRequested(
+      {
+        ok: false,
+        passed: false,
+        baselineMemgraph: baselinePath,
+        afterMemgraph: "",
+        testIdentifier: input.testIdentifier,
+        totals: {
+          baselineLeaks: 0,
+          afterLeaks: 0,
+          leakDelta: 0,
+        },
+        newCycles: [],
+        failureReason:
+          "After-capture failed. Configure the XCUITest to keep the app alive at end-of-test (e.g. `XCTAssertTrue(true); _ = XCTWaiter.wait(for: [...], timeout: 1.0)`) or run with a longer simulator boot.",
+        steps,
       },
-      newCycles: [],
-      failureReason:
-        "After-capture failed. Configure the XCUITest to keep the app alive at end-of-test (e.g. `XCTAssertTrue(true); _ = XCTWaiter.wait(for: [...], timeout: 1.0)`) or run with a longer simulator boot.",
-      steps,
-    };
+      input.outputHtmlPath,
+      input.scheme,
+    );
   }
 
   // 3. Diff.
@@ -310,26 +348,30 @@ export async function detectLeaksInXCUITest(
 
   const passed = failingCycles.length === 0 && testExitCode === 0;
 
-  return {
-    ok: true,
-    passed,
-    baselineMemgraph: baselinePath,
-    afterMemgraph: afterPath,
-    testIdentifier: input.testIdentifier,
-    totals: {
-      baselineLeaks: baselineReport.totals.leakCount,
-      afterLeaks: afterReport.totals.leakCount,
-      leakDelta:
-        afterReport.totals.leakCount - baselineReport.totals.leakCount,
+  return attachHtmlReportIfRequested(
+    {
+      ok: true,
+      passed,
+      baselineMemgraph: baselinePath,
+      afterMemgraph: afterPath,
+      testIdentifier: input.testIdentifier,
+      totals: {
+        baselineLeaks: baselineReport.totals.leakCount,
+        afterLeaks: afterReport.totals.leakCount,
+        leakDelta:
+          afterReport.totals.leakCount - baselineReport.totals.leakCount,
+      },
+      newCycles,
+      failureReason: passed
+        ? undefined
+        : testExitCode !== 0
+          ? `Test failed with exit code ${testExitCode}.`
+          : `${failingCycles.length} new ROOT CYCLE(s) appeared after the test that aren't in the allowlist: ${failingCycles.map((c) => c.rootClass).slice(0, 5).join(", ")}${failingCycles.length > 5 ? ", ..." : ""}`,
+      steps,
     },
-    newCycles,
-    failureReason: passed
-      ? undefined
-      : testExitCode !== 0
-        ? `Test failed with exit code ${testExitCode}.`
-        : `${failingCycles.length} new ROOT CYCLE(s) appeared after the test that aren't in the allowlist: ${failingCycles.map((c) => c.rootClass).slice(0, 5).join(", ")}${failingCycles.length > 5 ? ", ..." : ""}`,
-    steps,
-  };
+    input.outputHtmlPath,
+    input.scheme,
+  );
 }
 
 function countDescendants(children: Array<{ children: unknown[] }>): number {

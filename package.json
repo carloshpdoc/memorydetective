@@ -17,7 +17,7 @@
     "USAGE.md"
   ],
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "build": "tsc && cp -R src/templates dist/templates && chmod +x dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
