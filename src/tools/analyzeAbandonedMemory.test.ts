@@ -73,6 +73,63 @@ describe("classifyGrowth", () => {
     expect(c.classification).toBe("unknown-growth");
     expect(c.confidence).toBe("low");
   });
+
+  // v1.10 Phase C: tighten the KVO co-occurrence escalation.
+  describe("co-occurrence escalation guards (v1.10)", () => {
+    it("does NOT escalate framework-noise classes even with KVO co-occurrence", () => {
+      // <<TOTAL>> grew alongside KVO; it must not be tagged kvo-observer-orphaned.
+      const c = classifyGrowth("<<TOTAL>>", 4926, true, 15);
+      expect(c.classification).not.toBe("kvo-observer-orphaned");
+    });
+
+    it("does NOT escalate anonymous bracketed instances", () => {
+      // Anonymous `<malloc in ... 0xADDR> [size]` rows are not the observed type.
+      const c = classifyGrowth(
+        "<malloc in WeakTracker<TransportConnection> 0x600003231890> [48]",
+        642,
+        true,
+        15,
+      );
+      expect(c.classification).not.toBe("kvo-observer-orphaned");
+    });
+
+    it("does NOT escalate byte-offset prefixed entries", () => {
+      const c = classifyGrowth(
+        "8600 bytes into <Swift Metadata 0x156865400> [16896]",
+        780,
+        true,
+        15,
+      );
+      expect(c.classification).not.toBe("kvo-observer-orphaned");
+    });
+
+    it("respects the proportional threshold: small delta vs large KVO delta is rejected", () => {
+      // KVO grew +200, candidate only grew +5 (2.5% of KVO). Too small to be the observed type.
+      const c = classifyGrowth("MaybeRelated", 5, true, 200);
+      expect(c.classification).not.toBe("kvo-observer-orphaned");
+    });
+
+    it("escalates a candidate that grew proportionally to KVO", () => {
+      // KVO +15, AVPlayerItem +342 → ratio 22.8x, far above the high threshold.
+      const c = classifyGrowth("AVPlayerItem", 342, true, 15);
+      expect(c.classification).toBe("kvo-observer-orphaned");
+      expect(c.confidence).toBe("high");
+    });
+
+    it("escalates a moderately-sized candidate to medium when KVO delta is small", () => {
+      // KVO +8, MyDataLoader +30 → above mediumThreshold(max(5, 4)=5), below highThreshold(max(50, 40)=50).
+      const c = classifyGrowth("MyDataLoader", 30, true, 8);
+      expect(c.classification).toBe("kvo-observer-orphaned");
+      expect(c.confidence).toBe("medium");
+    });
+
+    it("framework noise that is a cache type falls through to cache-too-aggressive", () => {
+      // NSMutableDictionary IS framework noise (skipped by KVO escalation),
+      // but the cache-detection branch still catches it.
+      const c = classifyGrowth("NSMutableDictionary", 5000, true, 15);
+      expect(c.classification).toBe("cache-too-aggressive");
+    });
+  });
 });
 
 describe("buildAbandonedMemoryDiff (notelet fixture shape)", () => {

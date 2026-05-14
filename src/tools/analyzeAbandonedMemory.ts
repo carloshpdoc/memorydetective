@@ -341,13 +341,39 @@ export function classifyGrowth(
     };
   }
 
+  // KVO co-occurrence escalation. Tightened in v1.10 after the v1.9 retro
+  // showed the broad `delta >= 5` rule was painting 25 unrelated classes
+  // as `kvo-observer-orphaned high` whenever NSKeyValueObservance grew at
+  // all. Three guards now:
+  //   1. Skip classes that look like framework noise (allocator stacks,
+  //      memory zones, __DATA sections, summary rows, etc.)
+  //   2. Skip classes that are not "object-shaped" (anonymous bracket
+  //      forms `<... 0xADDR> [size]`, byte-offset prefixes, etc.). These
+  //      slip past Phase A's extractClassName when the leaks output uses
+  //      a non-canonical form for them.
+  //   3. Require the candidate's delta to be a meaningful FRACTION of
+  //      the KVO growth, not just any positive delta. A class with
+  //      delta=5 when NSKeyValueObservance grew by +200 is statistical
+  //      noise; the proportion thresholds below capture this.
   if (hasKvoCoOccurrence && delta >= 5) {
-    const confidence: "high" | "medium" = delta >= 50 ? "high" : "medium";
-    return {
-      classification: "kvo-observer-orphaned",
-      confidence,
-      hint: `Co-occurring NSKeyValueObservance growth (+${kvoObservanceDelta}) suggests this type is the value being observed via \`observe(\\.x) { ... }\`. The orphaned observer holds the value alive. Fixing the observer (\`token.invalidate()\` on teardown) will free this class too. See \`classifyCycle\` pattern \`kvo.observation-not-invalidated\`.`,
-    };
+    const isObjectShaped =
+      !isFrameworkNoise(className) &&
+      !/^<.*0x[0-9a-fA-F]+.*>/.test(className) &&
+      !/^\d+ bytes into\b/.test(className);
+    // Proportional thresholds. A class whose delta is below half of the
+    // NSKeyValueObservance delta is rejected as too small to be the
+    // observed type. Above 5x the KVO delta the confidence escalates
+    // to high (the class is the dominant observed type by a wide margin).
+    const mediumThreshold = Math.max(5, Math.floor(kvoObservanceDelta * 0.5));
+    const highThreshold = Math.max(50, Math.floor(kvoObservanceDelta * 5));
+    if (isObjectShaped && delta >= mediumThreshold) {
+      const confidence: "high" | "medium" = delta >= highThreshold ? "high" : "medium";
+      return {
+        classification: "kvo-observer-orphaned",
+        confidence,
+        hint: `Co-occurring NSKeyValueObservance growth (+${kvoObservanceDelta}) suggests this type is the value being observed via \`observe(\\.x) { ... }\`. The orphaned observer holds the value alive. Fixing the observer (\`token.invalidate()\` on teardown) will free this class too. See \`classifyCycle\` pattern \`kvo.observation-not-invalidated\`.`,
+      };
+    }
   }
 
   if (
