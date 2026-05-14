@@ -65,6 +65,34 @@ describe("countAlive (countByClass)", () => {
   });
 });
 
+describe("countAlive schema (v1.12 includeReferenceTree)", () => {
+  it("accepts the new includeReferenceTree flag", async () => {
+    const { countAliveSchema } = await import("./countAlive.js");
+    const parsed = countAliveSchema.parse({
+      path: "/tmp/x.memgraph",
+      className: "AVPlayerItem",
+      includeReferenceTree: true,
+    });
+    expect(parsed.includeReferenceTree).toBe(true);
+  });
+
+  it("defaults includeReferenceTree to false (preserves v1.11 behavior)", async () => {
+    const { countAliveSchema } = await import("./countAlive.js");
+    const parsed = countAliveSchema.parse({ path: "/tmp/x.memgraph" });
+    expect(parsed.includeReferenceTree).toBe(false);
+  });
+
+  it("rejects non-boolean includeReferenceTree", async () => {
+    const { countAliveSchema } = await import("./countAlive.js");
+    expect(() =>
+      countAliveSchema.parse({
+        path: "/tmp/x.memgraph",
+        includeReferenceTree: "yes",
+      }),
+    ).toThrow();
+  });
+});
+
 describe("diffReferenceTrees (v1.11)", () => {
   it("returns null when both sides are empty", async () => {
     const { diffReferenceTrees } = await import("./diffMemgraphs.js");
