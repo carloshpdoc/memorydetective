@@ -755,6 +755,78 @@ class WebBridge: NSObject, WKScriptMessageHandler {
   // v1.7 catalog
   // ─────────────────────────────────────────────────────────────────────────
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // v1.9 catalog (DebugSwift borrow)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "uikit.viewcontroller-retained-after-pop": {
+    before: `final class FeedViewController: UIViewController {
+    private var loader: FeedDataLoader?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        loader = FeedDataLoader()
+        loader?.onUpdate = { items in
+            self.tableView.reload(with: items) // strong capture -> VC outlives navigation
+        }
+    }
+}`,
+    after: `final class FeedViewController: UIViewController {
+    private var loader: FeedDataLoader?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        loader = FeedDataLoader()
+        loader?.onUpdate = { [weak self] items in
+            self?.tableView.reload(with: items)
+        }
+    }
+
+    deinit {
+        loader?.onUpdate = nil // belt and suspenders for KVO/NotificationCenter wiring
+    }
+}`,
+    notes:
+      "Symptom: VC is alive in the heap but no _parentViewController / _presentingViewController edge appears in the cycle. Audit closures captured in viewDidLoad, Task { } blocks, KVO observations, and delegate properties without weak.",
+  },
+
+  "swiftui.observable-write-on-every-render": {
+    before: `@Observable
+final class FeedModel {
+    var items: [Item] = []
+    var lastUpdated: Date = .now
+}
+
+struct FeedView: View {
+    @State private var model = FeedModel()
+    var body: some View {
+        List(model.items) { row in Text(row.title) }
+            .onAppear {
+                model.lastUpdated = .now // ⚠️ mutating inside body chain triggers re-render forever
+            }
+    }
+}`,
+    after: `@Observable
+final class FeedModel {
+    var items: [Item] = []
+    var lastUpdated: Date = .now
+
+    var lastUpdatedLabel: String { lastUpdated.formatted(.dateTime) } // derived, no mutation
+}
+
+struct FeedView: View {
+    @State private var model = FeedModel()
+    var body: some View {
+        List(model.items) { row in Text(row.title) }
+            .task(id: model.items) { // event-driven, fires once per items change
+                model.lastUpdated = .now
+            }
+    }
+}`,
+    notes:
+      "Move the mutation out of body. Use a computed property for derived values, or attach the side effect to .onChange / .task(id:) / .onAppear so it fires in response to an event, not on every render.",
+  },
+
   "swiftdata.modelcontext-actor-cycle": {
     before: `actor DataLayer {
     let context: ModelContext

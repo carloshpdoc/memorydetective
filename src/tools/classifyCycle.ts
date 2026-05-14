@@ -686,6 +686,92 @@ export const PATTERNS: PatternDefinition[] = [
   // Source: Apple Developer Forums #748042.
   // ────────────────────────────────────────────────────────────────────────
 
+  // ────────────────────────────────────────────────────────────────────────
+  // v1.9 catalog (DebugSwift borrow). Three shapes that DebugSwift's runtime
+  // detectors surface on-device, expressed here as cycle/heap signatures so
+  // they ride the same offline classifyCycle path as the rest of the
+  // catalog. The trace-side complement for SwiftUI render-burn lives on
+  // `analyzeAnimationHitches` (rendered separately).
+  // ────────────────────────────────────────────────────────────────────────
+
+  {
+    id: "uikit.viewcontroller-retained-after-pop",
+    name: "UIViewController alive in heap with no parent/presenting nav link",
+    fixHint:
+      "A UIViewController subclass is alive in the heap but no `_parentViewController` or `_presentingViewController` edge appears in the cycle. The VC was popped from its navigation stack but a closure / Combine sink / NotificationCenter block is still retaining it. Audit the VC's lifecycle: closures captured in `viewDidLoad`, `Task { }` blocks that outlive the screen, KVO observations that never `invalidate()`, and delegate properties declared without `weak`. DebugSwift surfaces this via `dealloc` swizzle on-device; the catalog-side equivalent is to look for the VC in the heap when its host container has dropped it.",
+    match: (_root, allClasses) => {
+      // Heuristic: a class name that ends in "ViewController" (or matches
+      // common UIKit VC bases) appears in the cycle, but no edge whose name
+      // contains the nav-parent / presenting accessors does. Without that
+      // edge, the VC is not visible to its container anymore -> it's been
+      // popped but something else is keeping it alive.
+      const classes = Array.from(allClasses);
+      const hasVc = classes.some(
+        (c) =>
+          c.endsWith("ViewController") ||
+          c === "UIViewController" ||
+          c === "UITableViewController" ||
+          c === "UICollectionViewController",
+      );
+      if (!hasVc) return null;
+      // Edge-side guard. If the cycle contains explicit parent/presenter
+      // edges, this is not the pop-leak shape (the VC is still owned by its
+      // container, the leak is elsewhere) so do NOT fire.
+      // `allClasses` is class names; we cannot inspect edges from here, but
+      // some leak reports include accessor names INSIDE the class string
+      // (e.g. "UIViewController._parentViewController"). Guard textually.
+      const hasParentEdge = classes.some(
+        (c) =>
+          c.includes("_parentViewController") ||
+          c.includes("_presentingViewController") ||
+          c.includes("parentViewController") ||
+          c.includes("presentingViewController"),
+      );
+      if (hasParentEdge) return null;
+      // Confidence: high when the VC is the ROOT of the cycle (it IS the
+      // orphan), medium when only present somewhere in the chain (could
+      // be a side passenger). Boost when a closure context is also in the
+      // chain (the most common retention vehicle for popped VCs).
+      const isRoot = classes[0]?.endsWith("ViewController") ?? false;
+      const hasClosure = classes.some((c) => c.includes("Closure context"));
+      if (isRoot && hasClosure) return "high";
+      if (isRoot) return "medium";
+      if (hasClosure) return "medium";
+      return "low";
+    },
+  },
+
+  {
+    id: "swiftui.observable-write-on-every-render",
+    name: "@Observable mutated inside `body`, triggering infinite re-render and a heap-side closure chain",
+    fixHint:
+      "A SwiftUI `@Observable` (or `ObservableObject`) instance is being mutated while `body` is evaluating, which schedules another render that mutates it again. Beyond the perf cost, the closure that mutates the observable usually captures the view's `self` (or an enclosing model), pinning a render-graph closure in the heap. Fix shape: move the side effect out of `body`. Either compute the value as a derived `var` (computed property) read by `body`, or attach it to `.onChange(of:)`/`.task(id:)`/`.onAppear` so the mutation happens in response to an event, not on every render pass. DebugSwift detects the perf side via render-frequency; the cycle catalog catches the heap shape it leaves behind.",
+    match: (_root, allClasses) => {
+      const classes = Array.from(allClasses);
+      const hasObservable = classes.some(
+        (c) =>
+          c.includes("ObservationRegistrar") ||
+          c.includes("SwiftUI.Observable") ||
+          c.includes("Observation._") ||
+          /@Observable/.test(c) ||
+          c.includes("ObservableObject"),
+      );
+      const hasViewBody = classes.some(
+        (c) =>
+          c.includes("SwiftUI.ViewGraph") ||
+          c.includes("SwiftUI._GraphValue") ||
+          c.includes("SwiftUI._ViewList") ||
+          c.includes("ViewBodyAccessor") ||
+          c.includes("DynamicViewProperty"),
+      );
+      const hasClosure = classes.some((c) => c.includes("Closure context"));
+      if (hasObservable && hasViewBody && hasClosure) return "high";
+      if (hasObservable && hasViewBody) return "medium";
+      if (hasObservable && hasClosure) return "low";
+      return null;
+    },
+  },
+
   {
     id: "swiftdata.modelcontext-actor-cycle",
     name: "SwiftData ModelContext retained by actor through DefaultSerialModelExecutor",

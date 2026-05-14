@@ -39,10 +39,138 @@ export const analyzeHangsSchema = z.object({
     .describe(
       "Optional time-window filter. Only hangs whose `startNs` falls within `[startMs, endMs]` (milliseconds since recording start) are included. Use this to answer 'what hangs happened between t=2s and t=7s?' without re-recording.",
     ),
+  topFramesByHangStartNs: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Optional supplemental map from a hang's `startNs` (as a string) to the top frame seen during that hang. When provided, each matching hang in `top[]` is enriched with `mainThreadViolations[]` that catalog the kind of work happening on the main thread (sync-io, db-lock, network, lock-contention). Typical pipeline: call `analyzeTimeProfile` separately on the same `.trace`, correlate samples to hang windows by timestamp, then re-call `analyzeHangs` with the resulting map. Omit to skip the enrichment.",
+    ),
   outputFormat: outputFormatField,
 });
 
 export type AnalyzeHangsInput = z.infer<typeof analyzeHangsSchema>;
+
+/**
+ * Catalog of main-thread-violation signatures. Each entry classifies a
+ * top-frame symbol pattern into one of four kinds that map onto the most
+ * common iOS user-perceived freezes:
+ *
+ *  - `sync-io`: a blocking POSIX read/write or Foundation file API the
+ *    runtime cannot async away from the main queue.
+ *  - `db-lock`: SQLite mutex acquisition (the underlying primitive for
+ *    Core Data, GRDB, and most Swift ORMs).
+ *  - `network`: a blocking Network.framework/NSURLConnection sync call.
+ *  - `lock-contention`: pthread/os_unfair_lock acquisition on the main
+ *    thread, which serializes us against another thread.
+ *
+ * The matchers are case-sensitive substring checks. They deliberately
+ * stay close to the symbol name DebugSwift's Thread Checker flags so the
+ * coverage gap between the on-device tool and the offline catalog stays
+ * small. Adding new symbols later is a one-line append.
+ */
+export type MainThreadViolationKind =
+  | "sync-io"
+  | "db-lock"
+  | "network"
+  | "lock-contention";
+
+export interface MainThreadViolation {
+  kind: MainThreadViolationKind;
+  topFrame: string;
+  samples: number;
+}
+
+interface ViolationSignature {
+  kind: MainThreadViolationKind;
+  matches: (frame: string) => boolean;
+}
+
+const MAIN_THREAD_VIOLATION_SIGNATURES: ViolationSignature[] = [
+  // sync-io: POSIX read/write and Foundation/NSData blocking APIs.
+  // Foundation often calls through to the libsystem symbols below, but
+  // dSYM symbolication can land on either, so match both.
+  {
+    kind: "sync-io",
+    matches: (f) =>
+      /\b(read|pread|readv|write|pwrite|writev|fsync|fdatasync|aio_read|aio_write)\b/.test(
+        f,
+      ) ||
+      f.includes("Data initWithContentsOfFile") ||
+      f.includes("NSData _initWithContentsOfURL") ||
+      f.includes("FileHandle readDataOfLength") ||
+      f.includes("FileManager createFileAtPath") ||
+      f.includes("FileManager removeItem"),
+  },
+  // db-lock: SQLite mutex acquisition. Triggers under Core Data, GRDB,
+  // SQLite.swift, FMDB - any client that funnels through libsqlite3.
+  {
+    kind: "db-lock",
+    matches: (f) =>
+      f.includes("sqlite3_step") ||
+      f.includes("sqlite3_prepare") ||
+      f.includes("sqlite3_mutex_enter") ||
+      f.includes("sqlite3LockAndPrepare") ||
+      f.includes("pagerSharedLock") ||
+      f.includes("NSPersistentStoreCoordinator lock") ||
+      f.includes("NSManagedObjectContext save"),
+  },
+  // network: blocking Network.framework / legacy NSURLConnection sync
+  // call, or +[NSURLConnection sendSynchronousRequest:returningResponse:].
+  {
+    kind: "network",
+    matches: (f) =>
+      f.includes("sendSynchronousRequest") ||
+      f.includes("NSURLConnection sendSynchronousRequest") ||
+      f.includes("URLSession dataTaskWithRequest") ||
+      // CFNetwork sync path.
+      f.includes("CFReadStreamRead") ||
+      // Network.framework sync wait.
+      /\bnw_connection_(start|wait)\b/.test(f),
+  },
+  // lock-contention: pthread / os_unfair_lock acquisition on the main
+  // thread that blocks waiting for another thread.
+  {
+    kind: "lock-contention",
+    matches: (f) =>
+      f.includes("pthread_mutex_lock") ||
+      f.includes("pthread_rwlock_wrlock") ||
+      f.includes("pthread_rwlock_rdlock") ||
+      f.includes("os_unfair_lock_lock") ||
+      f.includes("dispatch_semaphore_wait") ||
+      f.includes("dispatch_sync") ||
+      f.includes("NSConditionLock lockWhenCondition") ||
+      f.includes("NSLock lock"),
+  },
+];
+
+/**
+ * Pure: classify a top-frame symbol into a `MainThreadViolation`. Returns
+ * `null` when nothing in the catalog matches. The `samples` count comes
+ * from the caller; with only a top-frame string available we set it to 1.
+ *
+ * Multiple signatures can match a single frame (e.g. a sync I/O call that
+ * also holds an unfair lock). We return the FIRST match in catalog order,
+ * which puts more user-actionable categories ahead of generic locks.
+ */
+export function classifyHangFrame(
+  topFrame: string,
+  samples = 1,
+): MainThreadViolation | null {
+  for (const sig of MAIN_THREAD_VIOLATION_SIGNATURES) {
+    if (sig.matches(topFrame)) {
+      return { kind: sig.kind, topFrame, samples };
+    }
+  }
+  return null;
+}
+
+/** Stable key used to correlate the supplemental `topFramesByHangStartNs`
+ *  map. Hang startNs values are nanoseconds (integers when xctrace exports
+ *  them cleanly), so the key is just `String(startNs)`. Centralized so
+ *  callers building the map use the same convention. */
+export function hangFrameMapKey(startNs: number): string {
+  return String(startNs);
+}
 
 export interface HangEntry {
   startNs: number;
@@ -51,6 +179,10 @@ export interface HangEntry {
   durationMs: number;
   durationFmt: string;
   hangType: string;
+  /** Main-thread violations detected from the supplemental top-frame map.
+   *  Empty array when the caller provided a frame but no signature matched;
+   *  undefined when no frame was provided for this hang at all. */
+  mainThreadViolations?: MainThreadViolation[];
 }
 
 export interface AnalyzeHangsResult {
@@ -81,6 +213,7 @@ export function analyzeHangsFromXml(
   topN = 10,
   minDurationMs = 0,
   timeRangeMs?: { startMs: number; endMs: number },
+  topFramesByHangStartNs?: Readonly<Record<string, string>>,
 ): AnalyzeHangsResult {
   const tables = parseXctraceXml(xml);
   const hangsTable = tables.find((t) => t.schema === "potential-hangs");
@@ -138,6 +271,19 @@ export function analyzeHangsFromXml(
   const top = [...filtered]
     .sort((a, b) => b.durationMs - a.durationMs)
     .slice(0, topN);
+
+  // Enrich each top hang with main-thread violation classifications when
+  // the supplemental top-frame map was supplied. We mutate the cloned
+  // entries in `top` because they are not aliased back into `filtered`
+  // after the spread above.
+  if (topFramesByHangStartNs) {
+    for (const entry of top) {
+      const frame = topFramesByHangStartNs[hangFrameMapKey(entry.startNs)];
+      if (frame == null) continue;
+      const violation = classifyHangFrame(frame);
+      entry.mainThreadViolations = violation ? [violation] : [];
+    }
+  }
 
   const diagnosis = buildHangDiagnosis(
     filtered.length,
@@ -215,5 +361,6 @@ export async function analyzeHangs(
     input.topN ?? 10,
     input.minDurationMs ?? 0,
     input.timeRangeMs,
+    input.topFramesByHangStartNs,
   );
 }

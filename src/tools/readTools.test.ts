@@ -224,9 +224,9 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(classified[0].primaryMatch).toBeNull();
   });
 
-  it("PATTERNS array contains 34 patterns in v1.7 (8 v1.0 + 16 v1.4 + 3 v1.5 + 6 v1.6 + 1 v1.7)", () => {
+  it("PATTERNS array contains 36 patterns in v1.9 (8 v1.0 + 16 v1.4 + 3 v1.5 + 6 v1.6 + 1 v1.7 + 2 v1.9)", () => {
     const ids = PATTERNS.map((p) => p.id);
-    expect(ids.length).toBe(34);
+    expect(ids.length).toBe(36);
     // Spot-check key v1.0 patterns are still there.
     expect(ids).toContain("swiftui.tag-index-projection");
     expect(ids).toContain("combine.sink-store-self-capture");
@@ -248,6 +248,101 @@ describe("classifyCycle — additional patterns (synthetic cycles)", () => {
     expect(ids).toContain("webkit.wkscriptmessagehandler-bridge");
     // Spot-check v1.7 addition.
     expect(ids).toContain("swiftdata.modelcontext-actor-cycle");
+    // v1.9 additions (DebugSwift borrow).
+    expect(ids).toContain("uikit.viewcontroller-retained-after-pop");
+    expect(ids).toContain("swiftui.observable-write-on-every-render");
+  });
+});
+
+describe("classifyCycle: v1.9 catalog expansion", () => {
+  it("matches `uikit.viewcontroller-retained-after-pop` at HIGH when the root is a ViewController with a Closure context and no parent edge", () => {
+    const report = makeReport("FeedViewController", [
+      "Closure context",
+      "FeedDataLoader",
+    ]);
+    const { classified } = classifyReport(report);
+    const m = classified[0].allMatches.find(
+      (m) => m.patternId === "uikit.viewcontroller-retained-after-pop",
+    );
+    expect(m).toBeDefined();
+    expect(m?.confidence).toBe("high");
+  });
+
+  it("matches `uikit.viewcontroller-retained-after-pop` at MEDIUM when only the VC root is present (no closure)", () => {
+    const report = makeReport("FeedViewController", ["FeedDataLoader"]);
+    const { classified } = classifyReport(report);
+    const m = classified[0].allMatches.find(
+      (m) => m.patternId === "uikit.viewcontroller-retained-after-pop",
+    );
+    expect(m?.confidence).toBe("medium");
+  });
+
+  it("does NOT fire `uikit.viewcontroller-retained-after-pop` when a parent edge is present (VC is still owned)", () => {
+    const report = makeReport("FeedViewController", [
+      "Closure context",
+      "_parentViewController",
+    ]);
+    const { classified } = classifyReport(report);
+    const m = classified[0].allMatches.find(
+      (m) => m.patternId === "uikit.viewcontroller-retained-after-pop",
+    );
+    expect(m).toBeUndefined();
+  });
+
+  it("does NOT fire `uikit.viewcontroller-retained-after-pop` when the root is a non-VC class", () => {
+    const report = makeReport("FeedDataLoader", ["Closure context"]);
+    const { classified } = classifyReport(report);
+    const m = classified[0].allMatches.find(
+      (m) => m.patternId === "uikit.viewcontroller-retained-after-pop",
+    );
+    expect(m).toBeUndefined();
+  });
+
+  it("matches `swiftui.observable-write-on-every-render` at HIGH when Observable + ViewGraph + Closure context coexist", () => {
+    const report = makeReport("FeedView", [
+      "SwiftUI.ViewGraph",
+      "ObservationRegistrar",
+      "Closure context",
+    ]);
+    const { classified } = classifyReport(report);
+    const m = classified[0].allMatches.find(
+      (m) => m.patternId === "swiftui.observable-write-on-every-render",
+    );
+    expect(m).toBeDefined();
+    expect(m?.confidence).toBe("high");
+  });
+
+  it("matches `swiftui.observable-write-on-every-render` at MEDIUM when Observable + ViewGraph appear without a closure context", () => {
+    const report = makeReport("FeedView", [
+      "SwiftUI._GraphValue",
+      "ObservationRegistrar",
+    ]);
+    const { classified } = classifyReport(report);
+    const m = classified[0].allMatches.find(
+      (m) => m.patternId === "swiftui.observable-write-on-every-render",
+    );
+    expect(m?.confidence).toBe("medium");
+  });
+
+  it("does NOT fire `swiftui.observable-write-on-every-render` when only an Observable is present (no view-graph signal)", () => {
+    const report = makeReport("MyModel", ["ObservationRegistrar"]);
+    const { classified } = classifyReport(report);
+    const m = classified[0].allMatches.find(
+      (m) => m.patternId === "swiftui.observable-write-on-every-render",
+    );
+    expect(m).toBeUndefined();
+  });
+
+  it("fires `swiftui.observable-write-on-every-render` at LOW when Observable + Closure appear without an explicit view-graph class", () => {
+    const report = makeReport("MyView", [
+      "ObservableObject",
+      "Closure context",
+    ]);
+    const { classified } = classifyReport(report);
+    const m = classified[0].allMatches.find(
+      (m) => m.patternId === "swiftui.observable-write-on-every-render",
+    );
+    expect(m?.confidence).toBe("low");
   });
 });
 

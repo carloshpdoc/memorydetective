@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { analyzeHangsFromXml } from "./analyzeHangs.js";
+import {
+  analyzeHangsFromXml,
+  classifyHangFrame,
+  hangFrameMapKey,
+} from "./analyzeHangs.js";
 import { analyzeTimeProfileFromXml } from "./analyzeTimeProfile.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -107,6 +111,121 @@ describe("analyzeHangsFromXml", () => {
     });
     expect(windowed.totals.rows).toBe(0);
     expect(windowed.status).toBe("available");
+  });
+
+  it("enriches top hangs with mainThreadViolations when topFramesByHangStartNs is provided", () => {
+    const baseline = analyzeHangsFromXml(hangsXml, "/fake/run.trace", 100, 0);
+    expect(baseline.top.length).toBeGreaterThan(0);
+    const longest = baseline.top[0];
+    const map: Record<string, string> = {
+      [hangFrameMapKey(longest.startNs)]: "pthread_mutex_lock",
+    };
+    const enriched = analyzeHangsFromXml(
+      hangsXml,
+      "/fake/run.trace",
+      100,
+      0,
+      undefined,
+      map,
+    );
+    expect(enriched.top[0].mainThreadViolations).toEqual([
+      { kind: "lock-contention", topFrame: "pthread_mutex_lock", samples: 1 },
+    ]);
+  });
+
+  it("leaves mainThreadViolations undefined on hangs not present in the supplemental map", () => {
+    const baseline = analyzeHangsFromXml(hangsXml, "/fake/run.trace", 100, 0);
+    if (baseline.top.length < 2) return; // nothing to assert about
+    const longest = baseline.top[0];
+    const map: Record<string, string> = {
+      [hangFrameMapKey(longest.startNs)]: "sqlite3_step",
+    };
+    const enriched = analyzeHangsFromXml(
+      hangsXml,
+      "/fake/run.trace",
+      100,
+      0,
+      undefined,
+      map,
+    );
+    expect(enriched.top[0].mainThreadViolations).toBeDefined();
+    expect(enriched.top[1].mainThreadViolations).toBeUndefined();
+  });
+
+  it("returns an empty mainThreadViolations array when the frame is supplied but matches no signature", () => {
+    const baseline = analyzeHangsFromXml(hangsXml, "/fake/run.trace", 100, 0);
+    if (baseline.top.length === 0) return;
+    const longest = baseline.top[0];
+    const map: Record<string, string> = {
+      [hangFrameMapKey(longest.startNs)]: "MyAppCustomMainThreadHelper",
+    };
+    const enriched = analyzeHangsFromXml(
+      hangsXml,
+      "/fake/run.trace",
+      100,
+      0,
+      undefined,
+      map,
+    );
+    expect(enriched.top[0].mainThreadViolations).toEqual([]);
+  });
+});
+
+describe("classifyHangFrame", () => {
+  it("classifies sync-io for POSIX read/write/fsync top frames", () => {
+    expect(classifyHangFrame("read")?.kind).toBe("sync-io");
+    expect(classifyHangFrame("pwrite")?.kind).toBe("sync-io");
+    expect(classifyHangFrame("fsync")?.kind).toBe("sync-io");
+    expect(
+      classifyHangFrame("NSData _initWithContentsOfURL:options:error:")?.kind,
+    ).toBe("sync-io");
+  });
+
+  it("classifies db-lock for SQLite mutex/step/prepare top frames", () => {
+    expect(classifyHangFrame("sqlite3_step")?.kind).toBe("db-lock");
+    expect(classifyHangFrame("sqlite3_mutex_enter")?.kind).toBe("db-lock");
+    expect(classifyHangFrame("pagerSharedLock")?.kind).toBe("db-lock");
+    expect(classifyHangFrame("NSManagedObjectContext save:")?.kind).toBe(
+      "db-lock",
+    );
+  });
+
+  it("classifies network for synchronous URL session / CFNetwork frames", () => {
+    expect(
+      classifyHangFrame("NSURLConnection sendSynchronousRequest:")?.kind,
+    ).toBe("network");
+    expect(classifyHangFrame("CFReadStreamRead")?.kind).toBe("network");
+    expect(classifyHangFrame("nw_connection_start")?.kind).toBe("network");
+  });
+
+  it("classifies lock-contention for pthread / os_unfair / dispatch frames", () => {
+    expect(classifyHangFrame("pthread_mutex_lock")?.kind).toBe(
+      "lock-contention",
+    );
+    expect(classifyHangFrame("os_unfair_lock_lock")?.kind).toBe(
+      "lock-contention",
+    );
+    expect(classifyHangFrame("dispatch_semaphore_wait")?.kind).toBe(
+      "lock-contention",
+    );
+    expect(classifyHangFrame("dispatch_sync")?.kind).toBe("lock-contention");
+  });
+
+  it("returns null when the frame matches no signature", () => {
+    expect(classifyHangFrame("MyAppRenderView")).toBeNull();
+    expect(classifyHangFrame("")).toBeNull();
+    expect(classifyHangFrame("0x18004afc0")).toBeNull();
+  });
+
+  it("threads `samples` through unchanged", () => {
+    const v = classifyHangFrame("sqlite3_step", 42);
+    expect(v?.samples).toBe(42);
+    expect(v?.topFrame).toBe("sqlite3_step");
+  });
+
+  it("hangFrameMapKey returns the stringified startNs", () => {
+    expect(hangFrameMapKey(1_234_567_890)).toBe("1234567890");
+    expect(hangFrameMapKey(0)).toBe("0");
   });
 });
 

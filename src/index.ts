@@ -271,7 +271,7 @@ server.registerTool(
   {
     title: "Analyze potential hangs from a .trace bundle",
     description:
-      "[mg.trace] Run `xcrun xctrace export` against a `.trace` bundle for the `potential-hangs` schema and return aggregated stats (Hang vs Microhang counts, longest, average, total duration) plus the top N longest hangs sorted by duration. Use `minDurationMs: 250` to filter to user-visible hangs only.",
+      "[mg.trace] Run `xcrun xctrace export` against a `.trace` bundle for the `potential-hangs` schema and return aggregated stats (Hang vs Microhang counts, longest, average, total duration) plus the top N longest hangs sorted by duration. Use `minDurationMs: 250` to filter to user-visible hangs only. Pass `topFramesByHangStartNs: { '<startNs>': '<topFrame>' }` to enrich each top hang with a `mainThreadViolations[]` field that classifies the kind of work blocking the main thread (sync-io, db-lock, network, lock-contention). The map keys are stringified `startNs` values; the typical pipeline is to call `analyzeTimeProfile` separately on the same trace, correlate samples to the hang windows by timestamp, then re-call `analyzeHangs` with the resulting map.",
     inputSchema: analyzeHangsSchema.shape,
   },
   async (input) => {

@@ -256,7 +256,25 @@ const HINTS: Record<string, StaticAnalysisHint> = {
     rule: null,
     url: "https://developer.apple.com/forums/thread/748042",
     explanation:
-      "No static rule. The cycle is between Apple-provided types (`Actor` / `DefaultSerialModelExecutor` / `ModelContext`) — SwiftLint can't reason about Apple-framework retain semantics. Apple fixed the framework-level shape in iOS 18 beta 1 (FB13844786). Until your minimum target is iOS 18+, the user-code shape persists.",
+      "No static rule. The cycle is between Apple-provided types (`Actor` / `DefaultSerialModelExecutor` / `ModelContext`); SwiftLint can't reason about Apple-framework retain semantics. Apple fixed the framework-level shape in iOS 18 beta 1 (FB13844786). Until your minimum target is iOS 18+, the user-code shape persists.",
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // v1.9 catalog (DebugSwift borrow)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "uikit.viewcontroller-retained-after-pop": {
+    rule: "weak_delegate",
+    url: "https://realm.github.io/SwiftLint/weak_delegate.html",
+    explanation:
+      "`weak_delegate` catches the most common shape (delegate property without `weak`), and the project-wide `weak_self` rule covers closure-captured self in `viewDidLoad`/`viewWillAppear`. Neither catches Combine sinks stored on the VC nor KVO observations that never `invalidate()`; for those you need the offline catalog match.",
+  },
+
+  "swiftui.observable-write-on-every-render": {
+    rule: null,
+    url: "https://developer.apple.com/documentation/swiftui/managing-model-data-in-your-app",
+    explanation:
+      "No static rule. SwiftLint cannot prove that an `@Observable` mutation happens inside a `View.body` chain (it would need to reason about View body resolution, which is compiler-internal). The cycle catalog catches the heap shape it leaves behind; the trace-side perf signal (excessive body re-evaluations on the same view) is a parallel detector.",
   },
 };
 
