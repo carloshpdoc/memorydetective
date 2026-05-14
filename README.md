@@ -17,9 +17,9 @@
 - **MCP-native.** Plugs into Claude Code, Claude Desktop, Cursor, Cline, and any other MCP client. The agent drives the full investigate → classify → suggest-fix loop without you opening Instruments.
 - **Honest about its limits.** No mocked outputs, no over-promises. Hangs analysis works clean from `xctrace`; sample-level Time Profile is parsed when `xctrace` symbolicates the trace and returns a structured workaround notice when it can't (the underlying `xctrace` SIGSEGV on heavy unsymbolicated traces is an Apple-side limitation we surface explicitly). Memory Graph capture works on Mac apps and iOS simulator; physical iOS devices still need Xcode.
 
-> **What's new in v1.8** (2026-05-06): `leaks --outputGraph` regressed on macOS 26.x and aborts unless the target was launched with `MallocStackLogging=1`. This release fixes that end to end. `captureMemgraph` now emits a structured `workaroundNotice` when the regression hits, the new **`bootAndLaunchForLeakInvestigation`** tool absorbs build + boot + install + launch with the right env vars so capture works on the first try, and **`replayScenario`** + **`captureScenarioState`** close the verify-fix loop with deterministic before/after snapshots (memgraph + screenshot + UI tree, all labeled). 28 → 31 MCP tools, 213 → 287 tests.
+> **What's new in v1.9** (2026-05-14): Abandoned-memory detection for the family of bugs that `leaks(1)` reports as `leakCount: 0`. New `analyzeAbandonedMemory` tool diffs two memgraph snapshots on reference-tree class counts and classifies each grown class as `kvo-observer-orphaned`, `notificationcenter-observer-leaked`, `cache-too-aggressive`, `singleton-retains-payload`, or `unknown-growth`. New `detectLeaksInXCTest` per-test CI gate (sibling to `detectLeaksInXCUITest`), both with `outputHtmlPath` for self-contained reports. New `cleanupTraces` to keep `MEMORYDETECTIVE_TRACE_ROOT` from filling up. `analyzeHangs` gains `mainThreadViolations[]` classification (sync-io / db-lock / network / lock-contention). Security env flags `ALLOW_LAUNCH` / `MAX_RECORDING_SECONDS` / `TRACE_ROOT` / `ALLOW_EXTERNAL_CLEANUP` + a balanced/strict redaction layer. `outputFormat: "markdown" | "json" | "both"` on every analyzer. 31 → 34 MCP tools, 34 → 36 cycle patterns, 287 → 457 tests.
 >
-> **Also recent**: v1.7 (2026-05-03) added the 34th cycle pattern + `fixTemplate` snippets + `compareTracesByPattern` for trace-side CI gating. v1.6 (same day) added MCP Resources + Prompts. Full notes in [CHANGELOG](./CHANGELOG.md).
+> **Also recent**: v1.8 (2026-05-06) shipped the macOS 26.x `task_for_pid` workaround chain + verify-fix loop. v1.7 (2026-05-03) added `fixTemplate` snippets and `compareTracesByPattern`. Full notes in [CHANGELOG](./CHANGELOG.md).
 
 > **Heads up for macOS 26.x users:** Apple shipped a `task_for_pid` kernel regression on macOS 26.x that blocks `leaks --outputGraph`, `heap`, AND `xctrace --template Allocations` against iOS simulator processes regardless of `MallocStackLogging`. Even Xcode's "View Memory Graph Hierarchy" hits it unless `Malloc Stack Logging` is enabled in the scheme's Diagnostics tab. memorydetective surfaces this as a proactive `platformAdvisory` on the first capture-class tool call, plus a `workaroundNotice` with `issue: "macos-26-task-for-pid-broken"` if `leaks` is invoked. **The most reliable workaround today is to target an iOS 18 simulator runtime** (install via Xcode > Settings > Platforms > +iOS 18.x). Empirically validated in the [notelet investigation](https://github.com/carloshpdoc/memorydetective/blob/main/CHANGELOG.md#unreleased) 2026-05-12 where three independent CLI memory-introspection paths all failed before iOS 18 was identified as the working escape hatch. Set `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1` to silence the notice once you have settled on a workaround.
 
@@ -295,18 +295,18 @@ Copilot's MCP integration moves fast. If this snippet is stale, see the [VS Code
 
 ## API
 
-**31 MCP tools + 34 Resources + 5 Prompts**, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.build]`, `[mg.scenario]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[meta]`) so related tools are visible at a glance.
+**34 MCP tools + 34 Resources + 5 Prompts**, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.build]`, `[mg.scenario]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[ops]`, `[meta]`) so related tools are visible at a glance.
 
 Many tools include a `suggestedNextCalls` field in their response. A typed list of `{ tool, args, why }` entries pre-populated from the current result, so the orchestrating LLM can chain calls without re-reasoning. Start with `getInvestigationPlaybook(kind)` for the canonical sequence. Or just type `/investigate-leak` (one of the [Prompts](#prompts-5)) in any client that exposes MCP slash commands.
 
-The cycle classifier ships **34 named antipatterns** spanning SwiftUI (including the Swift 6 / `@Observable` / SwiftData / NavigationStack era), Combine, Swift Concurrency (incl. AsyncSequence-on-self and the new `Observations` API), UIKit (Timer/CADisplayLink/UIGestureRecognizer/KVO/URLSession/WebKit/DispatchSource), Core Animation, Core Data, Coordinator pattern, and the popular third-party libs RxSwift + Realm. Each pattern carries:
+The cycle classifier ships **36 named antipatterns** spanning SwiftUI (including the Swift 6 / `@Observable` / SwiftData / NavigationStack era, plus the v1.9 `swiftui.observable-write-on-every-render` shape), Combine, Swift Concurrency (incl. AsyncSequence-on-self and the new `Observations` API), UIKit (Timer/CADisplayLink/UIGestureRecognizer/KVO/URLSession/WebKit/DispatchSource, plus the v1.9 `uikit.viewcontroller-retained-after-pop` shape), Core Animation, Core Data, Coordinator pattern, and the popular third-party libs RxSwift + Realm. Each pattern carries:
 
 - a textual one-line `fixHint`
 - a confidence tier (`high` / `medium` / `low`)
 - a `staticAnalysisHint` pointing at the SwiftLint rule that complements the runtime evidence (or an explicit gap notice when no rule exists. Reinforces the differentiator: memorydetective sees what linters miss at parse time)
 - a `fixTemplate` with concrete Swift before/after snippets (new in v1.7) the agent can adapt directly to the user's code via the SourceKit-LSP source-bridging tools
 
-### Read & analyze (13)
+### Read & analyze (14)
 
 | Tool | What |
 |---|---|
@@ -316,9 +316,10 @@ The cycle classifier ships **34 named antipatterns** spanning SwiftUI (including
 | `countAlive` | Count instances by class. Provide `className` for one number, or omit for top-N most-leaked classes. |
 | `reachableFromCycle` | Cycle-scoped reachability. "How many `<X>` instances are reachable from the cycle rooted at `<Y>`?". Distinguishes the actual culprit from its retained dependencies. |
 | `diffMemgraphs` | Compare two `.memgraph` snapshots: total deltas + class-count changes + cycles new/gone/persisted. |
+| `analyzeAbandonedMemory` | Diff two `.memgraph` snapshots on heap reference-tree class counts (not cycle list) and classify each grown class as `kvo-observer-orphaned`, `notificationcenter-observer-leaked`, `cache-too-aggressive`, `singleton-retains-payload`, or `unknown-growth`. Surfaces the family of bugs `leaks(1)` reports as `leakCount: 0` because no strict cycle exists. |
 | `verifyFix` | Cycle-semantic diff: per-pattern PASS/PARTIAL/FAIL verdict + bytes freed. CI-gateable. |
-| `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of **34 named antipatterns** (SwiftUI / Combine / Concurrency / UIKit / Core Animation / Core Data / Coordinator / RxSwift / Realm) with confidence + textual `fixHint` + `staticAnalysisHint` (which SwiftLint rule complements this, or explicit gap) + `fixTemplate` (Swift before/after snippet). |
-| `analyzeHangs` | Parse `xctrace` `potential-hangs` schema; return Hang vs Microhang counts + top N longest. |
+| `classifyCycle` | Match each ROOT CYCLE against a built-in catalog of **36 named antipatterns** (SwiftUI / Combine / Concurrency / UIKit / Core Animation / Core Data / Coordinator / RxSwift / Realm) with confidence + textual `fixHint` + `staticAnalysisHint` (which SwiftLint rule complements this, or explicit gap) + `fixTemplate` (Swift before/after snippet). |
+| `analyzeHangs` | Parse `xctrace` `potential-hangs` schema; return Hang vs Microhang counts + top N longest. Pass `topFramesByHangStartNs` (typically from a chained `analyzeTimeProfile` correlation) to enrich each top hang with `mainThreadViolations[]` classifying the blocker as `sync-io`, `db-lock`, `network`, or `lock-contention`. |
 | `analyzeAnimationHitches` | Parse `xctrace` `animation-hitches` schema; report by-type counts and how many hitches crossed Apple's user-perceptible 100ms threshold. |
 | `analyzeTimeProfile` | Parse `xctrace` `time-profile` schema; return top symbols by sample count. Reports SIGSEGV with workarounds when xctrace can't symbolicate. |
 | `analyzeAllocations` | Parse `xctrace` `allocations` schema; return per-category aggregates (cumulative bytes, allocation count, lifecycle = transient/persistent/mixed) and top allocators. |
@@ -355,6 +356,12 @@ These three tools combine into a single deterministic verify-fix loop: launch th
 | Tool | What |
 |---|---|
 | `renderCycleGraph` | Read a `.memgraph`, pick a ROOT CYCLE, and emit a Mermaid graph (markdown-embeddable) or Graphviz DOT. App-level classes highlighted in red; CYCLE BACK terminators amber. |
+
+### Ops (1)
+
+| Tool | What |
+|---|---|
+| `cleanupTraces` | Preview and delete `.trace` bundles under `MEMORYDETECTIVE_TRACE_ROOT`. `dryRun: true` by default (the agent has to opt into deletion). Stops at the `.trace` boundary (does NOT descend INTO bundles). External roots require `MEMORYDETECTIVE_ALLOW_EXTERNAL_CLEANUP=1` (default-deny). Useful as a periodic call once a few `recordTimeProfile` sessions have accumulated tens to hundreds of MB of traces. |
 
 ### CI / test integration (3)
 

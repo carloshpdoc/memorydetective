@@ -6,12 +6,12 @@
     "url": "https://github.com/carloshpdoc/memorydetective",
     "source": "github"
   },
-  "version": "1.8.1",
+  "version": "1.9.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "memorydetective",
-      "version": "1.8.1",
+      "version": "1.9.0",
       "transport": {
         "type": "stdio"
       }

@@ -165,6 +165,13 @@ Sourced from Apple Developer Forums (#736110, #716804, #748042), Swift Forums (#
 |---|---|---|
 | `swiftdata.modelcontext-actor-cycle` | `ModelContext` + `DefaultSerialModelExecutor` (or `ModelExecutor`) + `Actor` in chain | Apple-documented quirk on iOS 17 (FB13844786, fixed in iOS 18 beta 1). Prefer the `@ModelActor` macro over hand-rolled executors; or hold `ModelContext` weakly inside a custom executor and re-resolve per operation. |
 
+### v1.9 catalog (2). DebugSwift borrow
+
+| Pattern ID | When it matches | Fix hint (summary) |
+|---|---|---|
+| `uikit.viewcontroller-retained-after-pop` | A `*ViewController` subclass is in the heap with no `_parentViewController` / `_presentingViewController` edge in the chain | VC was popped but a closure, Combine sink, NotificationCenter block, or KVO observation is still retaining it. Audit closures captured in `viewDidLoad`, `Task { }` blocks that outlive the screen, KVO observations that never `invalidate()`, and delegate properties declared without `weak`. |
+| `swiftui.observable-write-on-every-render` | `ObservationRegistrar` / `ObservableObject` + SwiftUI view-graph class (`ViewGraph`, `_GraphValue`, `_ViewList`, `ViewBodyAccessor`, `DynamicViewProperty`) + `Closure context` all in chain | An `@Observable` is mutated while `body` is evaluating, scheduling another render. Move the side effect out of `body`. Use a computed property for derived values, or attach to `.onChange(of:)` / `.task(id:)` / `.onAppear`. |
+
 **Confidence tiers**: each pattern returns `high`, `medium`, or `low` based on how many specific signals match. If multiple patterns fire on the same cycle, all matches are returned. The highest-confidence one is `primaryMatch`, the rest are in `allMatches`.
 
 **Static analysis bridge (v1.6+)**: every classified cycle now carries a `staticAnalysisHint` field with three sub-fields:

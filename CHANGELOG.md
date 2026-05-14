@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-05-14
+
 ### Added
 
 - **Security env flags: `MEMORYDETECTIVE_ALLOW_LAUNCH`, `MEMORYDETECTIVE_MAX_RECORDING_SECONDS`, `MEMORYDETECTIVE_TRACE_ROOT`.** `ALLOW_LAUNCH` gates `bootAndLaunchForLeakInvestigation`. The tool executes `xcodebuild` + `xcrun simctl launch` against caller-supplied paths and bundle ids; without the env var set to literally `"1"`, the tool returns `ok: false` with `state: "launchNotAllowed"` and a clear explanation rather than running. `MAX_RECORDING_SECONDS` caps `recordTimeProfile.durationSec` at the default 300s (configurable, bounded to 3600s hard ceiling) so an unattended agent cannot pile up multi-GB traces; over-cap requests throw with an actionable message. `TRACE_ROOT` becomes the default directory for `.trace` bundles when `recordTimeProfile.output` is a relative path (absolute paths bypass it, preserving v1.8 behavior); the directory is auto-created on first write. The same root will be the default scan path for the upcoming `cleanup_traces` tool. The `launchNotAllowed` state is a new value on the `LaunchState` union: agents that branch on `state` should add a case. 13 new unit tests in `src/runtime/securityFlags.test.ts` cover env-var parsing (defaults, strict literal-`1` for ALLOW_LAUNCH, bounds clamping for MAX_RECORDING_SECONDS, fallback on empty/invalid values for all three) plus the error-message helpers.
@@ -383,7 +385,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.8.1...v1.9.0
 [1.4.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.2.1...v1.3.0
