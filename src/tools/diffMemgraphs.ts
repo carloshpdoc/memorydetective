@@ -1,6 +1,12 @@
 import { z } from "zod";
+import { runCommand } from "../runtime/exec.js";
 import { runLeaksAndParse } from "../runtime/leaks.js";
 import { rootCyclesOnly } from "../parsers/leaksOutput.js";
+import {
+  parseReferenceTreeText,
+  isFrameworkNoise,
+  type ReferenceTreeEntry,
+} from "../parsers/referenceTree.js";
 import { countByClass } from "./countAlive.js";
 import type { LeaksReport, CycleNode } from "../types.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
@@ -33,6 +39,16 @@ export interface CycleDiffEntry {
   delta: number;
 }
 
+export interface ReferenceTreeDiffEntry {
+  className: string;
+  before: number;
+  after: number;
+  delta: number;
+  beforeBytes: number;
+  afterBytes: number;
+  bytesDelta: number;
+}
+
 export interface DiffMemgraphsResult {
   ok: boolean;
   before: { path: string; leakCount: number };
@@ -40,19 +56,48 @@ export interface DiffMemgraphsResult {
   totals: {
     leakCountDelta: number;
     bytesLeakedDelta: number;
+    /**
+     * Net instance-count delta from the reference-tree (heap-wide) view.
+     * Sum of all `referenceTreeChanges` deltas. Useful for "did the heap
+     * shrink overall?" without scrolling per-class. New in v1.11.
+     */
+    referenceTreeInstanceDelta?: number;
+    /** Net bytes delta from the reference-tree view. New in v1.11. */
+    referenceTreeBytesDelta?: number;
   };
   classCounts: {
-    /** Classes whose count went up (potential new leaks). */
+    /** Classes whose count went up (potential new leaks). Cycle-based view. */
     increased: Array<{ className: string; before: number; after: number; delta: number }>;
-    /** Classes whose count went down (fixed leaks or just gone). */
+    /** Classes whose count went down (fixed leaks or just gone). Cycle-based view. */
     decreased: Array<{ className: string; before: number; after: number; delta: number }>;
+  };
+  /**
+   * Heap-wide class-count changes from the reference-tree pass. Populated
+   * even when `leakCount` is 0 in both snapshots (which is exactly when
+   * cycle-only `classCounts` returns empty and the user wants this view).
+   * Includes framework noise (NSMutableDictionary, CFString, etc.); see
+   * `actionableReferenceTreeChanges` for the filtered view. New in v1.11.
+   */
+  referenceTreeChanges?: {
+    increased: ReferenceTreeDiffEntry[];
+    decreased: ReferenceTreeDiffEntry[];
+  };
+  /**
+   * `referenceTreeChanges` with framework noise filtered out via
+   * `isFrameworkNoise`. Surfaces AV / KVO / app-level classes for the
+   * verify-fix loop without scrolling past Foundation collection growth.
+   * New in v1.11.
+   */
+  actionableReferenceTreeChanges?: {
+    increased: ReferenceTreeDiffEntry[];
+    decreased: ReferenceTreeDiffEntry[];
   };
   cycles: {
     /** ROOT CYCLE signatures present only in `after`. */
     newInAfter: CycleDiffEntry[];
     /** Signatures present only in `before` (cycle disappeared). */
     goneFromBefore: CycleDiffEntry[];
-    /** Signatures present in both — count change is what matters. */
+    /** Signatures present in both; count change is what matters. */
     persisted: CycleDiffEntry[];
   };
 }
@@ -157,13 +202,130 @@ export function diffReports(
   };
 }
 
+/**
+ * Pure: diff two reference-tree entry lists by class name and return
+ * increased / decreased buckets. Each entry carries before/after counts,
+ * bytes, and delta values. Sorted: increased by delta desc, decreased by
+ * delta asc (most-negative first).
+ *
+ * Returns null when both inputs are empty. The async wrapper uses this
+ * absence to suppress the `referenceTreeChanges` field on the result so
+ * cycle-only callers see no change vs v1.10. New in v1.11.
+ */
+export function diffReferenceTrees(
+  before: ReferenceTreeEntry[],
+  after: ReferenceTreeEntry[],
+): {
+  increased: ReferenceTreeDiffEntry[];
+  decreased: ReferenceTreeDiffEntry[];
+} | null {
+  if (before.length === 0 && after.length === 0) return null;
+  const beforeByClass = new Map(before.map((e) => [e.className, e]));
+  const afterByClass = new Map(after.map((e) => [e.className, e]));
+  const allClasses = new Set([
+    ...beforeByClass.keys(),
+    ...afterByClass.keys(),
+  ]);
+  const increased: ReferenceTreeDiffEntry[] = [];
+  const decreased: ReferenceTreeDiffEntry[] = [];
+  for (const cls of allClasses) {
+    const b = beforeByClass.get(cls);
+    const a = afterByClass.get(cls);
+    const beforeCount = b?.instanceCount ?? 0;
+    const afterCount = a?.instanceCount ?? 0;
+    const delta = afterCount - beforeCount;
+    if (delta === 0) continue;
+    const beforeBytes = b?.totalBytes ?? 0;
+    const afterBytes = a?.totalBytes ?? 0;
+    const entry: ReferenceTreeDiffEntry = {
+      className: cls,
+      before: beforeCount,
+      after: afterCount,
+      delta,
+      beforeBytes,
+      afterBytes,
+      bytesDelta: afterBytes - beforeBytes,
+    };
+    if (delta > 0) increased.push(entry);
+    else decreased.push(entry);
+  }
+  increased.sort((x, y) => y.delta - x.delta || y.bytesDelta - x.bytesDelta);
+  decreased.sort((x, y) => x.delta - y.delta || x.bytesDelta - y.bytesDelta);
+  return { increased, decreased };
+}
+
+/**
+ * Wide capture pool for the reference-tree pass. Mirrors analyzeMemgraph's
+ * 10x heuristic from v1.10: the actionable view filters out framework
+ * noise (NSMutableDictionary, CFString, libMainThreadChecker bss, etc.)
+ * so we need enough headroom for app-level classes ranked below the
+ * noise leaders to survive into the post-filter top.
+ */
+const REFERENCE_TREE_DIFF_TOPN = 1000;
+
+/** Spawn `leaks --referenceTree --groupByType --noContent` against a
+ *  `.memgraph` and return parsed entries. Failure is non-fatal: returns
+ *  an empty array so the cycle-side diff still completes. */
+async function captureReferenceTree(
+  path: string,
+): Promise<ReferenceTreeEntry[]> {
+  const result = await runCommand(
+    "leaks",
+    ["--referenceTree", "--groupByType", "--noContent", path],
+    { timeoutMs: 5 * 60_000 },
+  );
+  if (result.code !== 0 && result.code !== 1) {
+    return [];
+  }
+  return parseReferenceTreeText(result.stdout, REFERENCE_TREE_DIFF_TOPN);
+}
+
 export async function diffMemgraphs(
   input: DiffMemgraphsInput,
 ): Promise<DiffMemgraphsResult> {
-  const [{ report: before, resolvedPath: bp }, { report: after, resolvedPath: ap }] =
-    await Promise.all([
-      runLeaksAndParse(input.before),
-      runLeaksAndParse(input.after),
-    ]);
-  return diffReports(before, after, bp, ap);
+  const [
+    { report: before, resolvedPath: bp },
+    { report: after, resolvedPath: ap },
+    beforeRefTree,
+    afterRefTree,
+  ] = await Promise.all([
+    runLeaksAndParse(input.before),
+    runLeaksAndParse(input.after),
+    captureReferenceTree(input.before),
+    captureReferenceTree(input.after),
+  ]);
+
+  const result = diffReports(before, after, bp, ap);
+
+  const referenceTreeChanges = diffReferenceTrees(beforeRefTree, afterRefTree);
+  if (referenceTreeChanges) {
+    result.referenceTreeChanges = referenceTreeChanges;
+    // Actionable view: same diff with framework noise filtered out. Same
+    // ordering preserved (no re-rank). Provides the verify-fix view for
+    // the notelet-shape case where AVPlayerItem 342 to 0 needs to surface
+    // above NSMutableDictionary 12k to 11k noise.
+    result.actionableReferenceTreeChanges = {
+      increased: referenceTreeChanges.increased.filter(
+        (e) => !isFrameworkNoise(e.className),
+      ),
+      decreased: referenceTreeChanges.decreased.filter(
+        (e) => !isFrameworkNoise(e.className),
+      ),
+    };
+    // Heap-wide totals so callers can branch on a single number.
+    let instanceDelta = 0;
+    let bytesDelta = 0;
+    for (const e of referenceTreeChanges.increased) {
+      instanceDelta += e.delta;
+      bytesDelta += e.bytesDelta;
+    }
+    for (const e of referenceTreeChanges.decreased) {
+      instanceDelta += e.delta;
+      bytesDelta += e.bytesDelta;
+    }
+    result.totals.referenceTreeInstanceDelta = instanceDelta;
+    result.totals.referenceTreeBytesDelta = bytesDelta;
+  }
+
+  return result;
 }

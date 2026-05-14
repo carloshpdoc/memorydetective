@@ -65,6 +65,59 @@ describe("countAlive (countByClass)", () => {
   });
 });
 
+describe("diffReferenceTrees (v1.11)", () => {
+  it("returns null when both sides are empty", async () => {
+    const { diffReferenceTrees } = await import("./diffMemgraphs.js");
+    expect(diffReferenceTrees([], [])).toBeNull();
+  });
+
+  it("buckets entries by class and surfaces decreases (verify-fix shape)", async () => {
+    const { diffReferenceTrees } = await import("./diffMemgraphs.js");
+    const before = [
+      { className: "AVPlayerItem", instanceCount: 342, totalBytes: 29491 },
+      { className: "NSKeyValueObservance", instanceCount: 29, totalBytes: 1392 },
+      { className: "AppViewModel", instanceCount: 10, totalBytes: 800 },
+    ];
+    const after = [
+      { className: "AVPlayerItem", instanceCount: 0, totalBytes: 0 },
+      { className: "NSKeyValueObservance", instanceCount: 7, totalBytes: 336 },
+      { className: "AppViewModel", instanceCount: 10, totalBytes: 800 },
+    ];
+    const diff = diffReferenceTrees(before, after);
+    expect(diff).not.toBeNull();
+    expect(diff!.decreased.map((e) => e.className)).toEqual([
+      "AVPlayerItem",
+      "NSKeyValueObservance",
+    ]);
+    expect(diff!.decreased[0].delta).toBe(-342);
+    expect(diff!.decreased[0].bytesDelta).toBe(-29491);
+    expect(diff!.increased).toEqual([]);
+  });
+
+  it("ignores zero-delta classes (unchanged)", async () => {
+    const { diffReferenceTrees } = await import("./diffMemgraphs.js");
+    const both = [{ className: "Stable", instanceCount: 5, totalBytes: 40 }];
+    const diff = diffReferenceTrees(both, both)!;
+    expect(diff.increased).toEqual([]);
+    expect(diff.decreased).toEqual([]);
+  });
+
+  it("handles new-on-only-after and gone-from-before", async () => {
+    const { diffReferenceTrees } = await import("./diffMemgraphs.js");
+    const before = [
+      { className: "Gone", instanceCount: 100, totalBytes: 1000 },
+    ];
+    const after = [
+      { className: "Appeared", instanceCount: 50, totalBytes: 500 },
+    ];
+    const diff = diffReferenceTrees(before, after)!;
+    expect(diff.increased.map((e) => e.className)).toEqual(["Appeared"]);
+    expect(diff.increased[0].before).toBe(0);
+    expect(diff.decreased.map((e) => e.className)).toEqual(["Gone"]);
+    expect(diff.decreased[0].after).toBe(0);
+  });
+});
+
 describe("diffMemgraphs (diffReports)", () => {
   const before = parseLeaksOutput(leaksText); // 60436 leaks
   const after = parseLeaksOutput(fix2Text); // 55576 leaks
