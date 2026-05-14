@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseSizeBytes,
   extractClassName,
+  isFrameworkNoise,
   parseReferenceTreeText,
 } from "./referenceTree.js";
 
@@ -119,5 +120,144 @@ describe("parseReferenceTreeText", () => {
     `;
     const entries = parseReferenceTreeText(text, 10);
     expect(entries.map((e) => e.className)).toEqual(["AVPlayerItem"]);
+  });
+});
+
+describe("extractClassName: bracket-address normalization (v1.10)", () => {
+  it("normalizes `<ClassName 0xADDR> [size]` to ClassName", () => {
+    expect(extractClassName("<CFDictionary 0x6000029c4840> [64]")).toBe(
+      "CFDictionary",
+    );
+    expect(extractClassName("<NSMutableDictionary 0x600003ccf5c0> [32]")).toBe(
+      "NSMutableDictionary",
+    );
+  });
+
+  it("normalizes `<ClassName 0xADDR>` (no size suffix) to ClassName", () => {
+    expect(extractClassName("<NSObject 0x14f100>")).toBe("NSObject");
+  });
+
+  it("normalizes the bracket form when it follows an arrow", () => {
+    expect(
+      extractClassName("_object --> <NSObject 0x14f100> [16]"),
+    ).toBe("NSObject");
+    expect(
+      extractClassName("__strong target --> <AVCMNotificationDispatcher 0x600003c09a00> [32]"),
+    ).toBe("AVCMNotificationDispatcher");
+  });
+
+  it("filters bracketed allocator entries (`<malloc in ...>`)", () => {
+    expect(
+      extractClassName("<malloc in invocation function 0x15192b120> [48]"),
+    ).toBeNull();
+    expect(
+      extractClassName("<calloc in CGFontDBCreate 0x14f85b8b0> [112]"),
+    ).toBeNull();
+  });
+
+  it("filters allocator entries that appear AFTER an arrow", () => {
+    // Real leaks output: the value type can resolve to an allocator entry
+    // when leaks shows the underlying alloc-stack origin instead of a class.
+    expect(
+      extractClassName("unaligned +1375:  --> calloc in quic_stream_allocate"),
+    ).toBeNull();
+    expect(
+      extractClassName("_buffer --> malloc in some_internal_helper"),
+    ).toBeNull();
+  });
+
+  it("preserves namespaced class names inside brackets", () => {
+    // Names with dots (Swift module-qualified) survive the normalizer.
+    expect(extractClassName("<SwiftUI.ViewGraph 0x14f700> [128]")).toBe(
+      "SwiftUI.ViewGraph",
+    );
+  });
+});
+
+describe("isFrameworkNoise", () => {
+  it("flags the <<TOTAL>> summary row", () => {
+    expect(isFrameworkNoise("<<TOTAL>>")).toBe(true);
+    expect(isFrameworkNoise("<< TOTAL >>")).toBe(true);
+  });
+
+  it("flags Foundation collection types", () => {
+    expect(isFrameworkNoise("NSMutableDictionary")).toBe(true);
+    expect(isFrameworkNoise("NSMutableDictionary (Storage)")).toBe(true);
+    expect(isFrameworkNoise("CFString")).toBe(true);
+    expect(isFrameworkNoise("NSMutableArray (Storage)")).toBe(true);
+    expect(isFrameworkNoise("CFSet (Value Storage)")).toBe(true);
+  });
+
+  it("flags ObjC runtime + metadata classes", () => {
+    expect(isFrameworkNoise("Class.data (class_rw_t)")).toBe(true);
+    expect(isFrameworkNoise("Class.methodCache._buckets (bucket_t)")).toBe(true);
+    expect(isFrameworkNoise("OBJC_METACLASS_$_NSKeyValueObservation")).toBe(true);
+  });
+
+  it("flags __DATA sections (bss / data / common / objc_data / objc_const)", () => {
+    expect(
+      isFrameworkNoise("libMainThreadChecker.dylib __DATA __bss: 'data[]'"),
+    ).toBe(true);
+    expect(
+      isFrameworkNoise("Foundation __DATA __bss: '_MergedGlobals.9[]'"),
+    ).toBe(true);
+    // ObjC class data section: framework runtime metadata that scales
+    // with how many classes are loaded, NOT actionable user state.
+    expect(isFrameworkNoise("UIKitCore __DATA __objc_data")).toBe(true);
+    expect(isFrameworkNoise("Foundation __DATA __objc_data")).toBe(true);
+    // _DIRTY variant for the same family.
+    expect(
+      isFrameworkNoise("dyld __DATA_DIRTY __common: '_main_thread[]'"),
+    ).toBe(true);
+  });
+
+  it("flags block infrastructure", () => {
+    expect(isFrameworkNoise("__NSMallocBlock__")).toBe(true);
+    expect(isFrameworkNoise("__NSConcreteMallocBlock")).toBe(true);
+    expect(isFrameworkNoise("__NSStackBlock__")).toBe(true);
+  });
+
+  it("flags Swift Metadata + GCD + C++ stdlib internals", () => {
+    expect(isFrameworkNoise("Swift Metadata")).toBe(true);
+    expect(isFrameworkNoise("dispatch_queue_t (serial)")).toBe(true);
+    expect(isFrameworkNoise("dispatch_semaphore_t")).toBe(true);
+    expect(isFrameworkNoise("std::__shared_ptr_emplace<NWIOConnection>")).toBe(
+      true,
+    );
+  });
+
+  it("flags Stack of thread N / non-object / VM regions", () => {
+    expect(isFrameworkNoise("Stack of thread 4")).toBe(true);
+    expect(isFrameworkNoise("non-object with no stack backtrace")).toBe(true);
+    expect(isFrameworkNoise("non-object in zone DefaultMallocZone_0x102194000")).toBe(true);
+    expect(
+      isFrameworkNoise("VM: AttributeGraph Data  0x14f700000-0x14f800000"),
+    ).toBe(true);
+  });
+
+  it("flags anonymous bracketed instances that slipped past normalization", () => {
+    // If extractClassName didn't catch a bracketed form (e.g. malformed),
+    // these still get filtered out at this layer so they don't pollute the
+    // actionable list.
+    expect(isFrameworkNoise("<calloc in foo 0x1500> [16]")).toBe(true);
+    expect(isFrameworkNoise("<NSMutableDictionary 0xabcd> [32]")).toBe(true);
+  });
+
+  it("does NOT flag actionable AV / KVO / SwiftUI classes", () => {
+    expect(isFrameworkNoise("AVPlayerItem")).toBe(false);
+    expect(isFrameworkNoise("AVPlayerInternal")).toBe(false);
+    expect(isFrameworkNoise("AVPlayerPlaybackCoordinator")).toBe(false);
+    expect(isFrameworkNoise("NSKeyValueObservance")).toBe(false);
+    expect(isFrameworkNoise("NSKeyValueObservationInfo")).toBe(false);
+    expect(isFrameworkNoise("SwiftUI.ViewGraph")).toBe(false);
+    expect(
+      isFrameworkNoise("SwiftUI.StoredLocation<Swift.Optional<__C.AVPlayerLooper>>"),
+    ).toBe(false);
+  });
+
+  it("does NOT flag user app-level class names", () => {
+    expect(isFrameworkNoise("FeedViewController")).toBe(false);
+    expect(isFrameworkNoise("MyAppViewModel")).toBe(false);
+    expect(isFrameworkNoise("DetailViewModel")).toBe(false);
   });
 });

@@ -28,6 +28,7 @@ import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
 import {
   parseReferenceTreeText,
+  isFrameworkNoise,
   type ReferenceTreeEntry,
 } from "../parsers/referenceTree.js";
 import type { NextCallSuggestion } from "../types.js";
@@ -108,14 +109,36 @@ export interface AnalyzeAbandonedMemoryResult {
    * descending. Each entry carries a `classification` from the catalog plus
    * a `confidence` tier. The agent can branch on `classification` to choose
    * the right `swiftSearchPattern` / fix template.
+   *
+   * **Raw view.** Includes framework noise (NSMutableDictionary, CFString,
+   * libMainThreadChecker bss, etc.). Useful for cache-bloat investigations.
    */
   growthByClass: AbandonedMemoryEntry[];
   /**
    * Classes that shrunk between before and after. Surfaced so the caller
    * can confirm the fix freed the suspect class (e.g. AVPlayerItem in the
    * notelet case went from 342 to 0). Sorted by absolute delta desc.
+   *
+   * **Raw view.** See `actionableShrinkage` for the filtered "what fix
+   * verifiably freed" view.
    */
   shrinkageByClass: AbandonedMemoryEntry[];
+  /**
+   * `growthByClass` with framework noise filtered out (Foundation collection
+   * types, ObjC metadata, __DATA sections, allocator stacks, etc.). The
+   * remaining entries are user-actionable classes. New in v1.10.
+   *
+   * Use this when answering "what new bug just appeared?". Use the raw
+   * `growthByClass` when answering "what does the heap look like now?".
+   */
+  actionableGrowth: AbandonedMemoryEntry[];
+  /**
+   * `shrinkageByClass` with framework noise filtered out. Use this in the
+   * verify-fix loop to confirm which app-level classes the fix actually
+   * freed. AVPlayerItem dropping from 342 to 0 shows up here at the top.
+   * New in v1.10.
+   */
+  actionableShrinkage: AbandonedMemoryEntry[];
   /** Plain-English diagnosis tying the highest-confidence growth to a fix hint. */
   diagnosis: string;
   /** Pipeline hints: chain into `swiftSearchPattern` against the top growth class. */
@@ -247,10 +270,24 @@ export function buildAbandonedMemoryDiff(
 
   const suggestedNextCalls = buildSuggestedNextCalls(growthByClass);
 
+  // Actionable views: drop framework noise so the caller's first-look list
+  // surfaces app-level + AV + KVO classes instead of NSMutableDictionary +
+  // CFString + ObjC runtime data. Same ranking, just filtered. Falls back
+  // to topN, so the actionable list can be SHORTER than the raw view when
+  // most of the top entries are noise.
+  const actionableGrowth = growthByClass
+    .filter((e) => !isFrameworkNoise(e.className))
+    .slice(0, options.topN);
+  const actionableShrinkage = shrinkageByClass
+    .filter((e) => !isFrameworkNoise(e.className))
+    .slice(0, options.topN);
+
   return {
     totals,
     growthByClass: growthByClass.slice(0, options.topN),
     shrinkageByClass: shrinkageByClass.slice(0, options.topN),
+    actionableGrowth,
+    actionableShrinkage,
     diagnosis,
     ...(suggestedNextCalls.length > 0 ? { suggestedNextCalls } : {}),
   };

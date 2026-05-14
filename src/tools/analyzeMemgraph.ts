@@ -5,6 +5,7 @@ import { runCommand } from "../runtime/exec.js";
 import { parseLeaksOutput, rootCyclesOnly } from "../parsers/leaksOutput.js";
 import {
   parseReferenceTreeText,
+  isFrameworkNoise,
   type ReferenceTreeEntry,
 } from "../parsers/referenceTree.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
@@ -113,8 +114,27 @@ export interface AnalyzeMemgraphResult {
    * not formal leaks; they are reachable-but-suspicious and worth diffing
    * against a baseline via `analyzeAbandonedMemory(before, after)` for
    * the verdict.
+   *
+   * **Raw view.** Includes framework noise (NSMutableDictionary, CFString,
+   * libMainThreadChecker bss, etc.) that grows with normal app activity
+   * and is rarely the actionable leak. Useful for cache-bloat or
+   * collection-explosion investigations.
    */
   abandonedMemoryTop?: ReferenceTreeEntry[];
+  /**
+   * Same top-N reference-tree analysis as `abandonedMemoryTop` but filtered
+   * to actionable classes only. Foundation collection types (NSMutableDictionary,
+   * CFString, ...), ObjC runtime metadata (Class.data, OBJC_METACLASS_),
+   * Apple-framework static-data sections (__DATA __bss / __data / __common),
+   * Stack of thread / non-object / VM region rows, and the `<<TOTAL>>`
+   * summary are all excluded. The remaining list surfaces AV*, KVO*,
+   * SwiftUI app-level types, user-named classes, and other classes the
+   * fix would actually live in. New in v1.10.
+   *
+   * Use this list for the "what should I worry about?" question; use
+   * `abandonedMemoryTop` for "what's the full heap distribution?".
+   */
+  abandonedMemorySuspects?: ReferenceTreeEntry[];
 }
 
 /**
@@ -266,9 +286,23 @@ export async function analyzeMemgraph(
   // a workflow.
   const topN = input.referenceTreeTopN ?? 20;
   if (summary.totals.leakCount === 0 && topN > 0) {
-    const abandonedMemoryTop = await captureReferenceTreeTop(path, topN);
-    if (abandonedMemoryTop.length > 0) {
-      summary.abandonedMemoryTop = abandonedMemoryTop;
+    // Capture a much larger pool than `topN` so that after filtering for
+    // the actionable view (`abandonedMemorySuspects`), we still have enough
+    // entries to surface the user-relevant classes that would otherwise
+    // be ranked below framework noise in the raw view. The notelet
+    // investigation showed AVPlayerItem at raw rank ~82 in a ~200-class
+    // heap; 10x of a 20-element default reliably surfaces classes ranked
+    // outside the raw top 20 after the noise filter trims the leaders.
+    const captureTopN = Math.max(topN, topN * 10, 200);
+    const rawTop = await captureReferenceTreeTop(path, captureTopN);
+    if (rawTop.length > 0) {
+      // Raw view: first `topN` entries unchanged from existing behavior.
+      summary.abandonedMemoryTop = rawTop.slice(0, topN);
+      // Filtered view: drop framework noise, keep ranking, then trim to topN.
+      const filtered = rawTop.filter((e) => !isFrameworkNoise(e.className));
+      if (filtered.length > 0) {
+        summary.abandonedMemorySuspects = filtered.slice(0, topN);
+      }
     }
   }
 
