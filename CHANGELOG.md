@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-05-14
+
+Notelet retro feedback loop: re-running the v1.9 abandoned-memory tools against the same memgraphs that originally drove the v1.9.0 release surfaced three concrete gaps. This minor patches all of them so the notelet investigation's headline finding (AVPlayerItem went 342 to 0, KVO observer never invalidated) is reproducible end-to-end via JSON instead of requiring a manual `leaks --debug=stacks` grep.
+
+### Added
+
+- **`analyzeMemgraph.abandonedMemorySuspects[]`** parallel to `abandonedMemoryTop[]`. The raw view kept its semantics (top-N classes by live instance count, including framework collections + ObjC runtime metadata) for cache-bloat-shaped investigations. The new "suspects" view applies a `isFrameworkNoise()` filter on the same data, so AV* / KVO* / app-level classes surface even when ranked below NSMutableDictionary / CFString / `__DATA __bss` in the raw view. Internally captures a 10x pool (min 200 entries) so post-filter ranking still has enough headroom to surface classes that v1.9 left invisible at default `referenceTreeTopN: 20`. Validated on the notelet pre-fix memgraph: AVPlayerItem at raw rank 82 surfaces at suspect rank 13 of 20.
+
+- **`analyzeAbandonedMemory.actionableGrowth[]` + `actionableShrinkage[]`** parallel to the existing `growthByClass[]` + `shrinkageByClass[]`. Same noise filter applied. The verify-fix loop becomes "did `actionableShrinkage` lead with the suspect class?" instead of "scroll past 25 framework noise rows to find AVPlayerItem". Validated on the notelet pre-fix vs post-fix diff: `actionableShrinkage[]` leads with AVCMNotificationDispatcher (1802 to 4), AVCMNotificationDispatcherListenerKey (603 to 0), AVPlayerItem (342 to 0), AVPlayerInternal (297 to 0), AVPlayerPlaybackCoordinator (290 to 0), all the AVFoundation classes the fix actually freed.
+
+- **`outputFormat: "verify-fix-table"`** value on the shared `outputFormatField`. When set on `analyzeAbandonedMemory`, the response is a focused 4-column markdown table (Class | Before | After | Delta) of the actionable rows (|delta| >= 10), split into "What the fix freed" (shrinkage) and "Classes that grew (regressions or unrelated)" (growth), plus a trailing diagnosis blockquote. Other tools fall back to standard markdown. The hand-built comparison table in the notelet follow-up post is reproducible from a single call now. 7 new unit tests in `src/runtime/responseFormatter.test.ts` cover the renderer + threshold filter + the formatMcpResponse routing.
+
+### Changed
+
+- **`extractClassName` parser fix.** The allocator filter (`malloc | calloc | realloc`) now runs AFTER the arrow split, so entries like `unaligned --> calloc in quic_stream_allocate` are correctly dropped (the v1.9 filter only ran against the original label, missing allocator names on the RHS of arrows). 1 new unit test covering this exact case.
+
+- **`extractClassName` normalizes bracketed instance forms.** `<ClassName 0xADDR> [size]` and `<ClassName 0xADDR>` patterns now resolve to `ClassName`. Without this normalization, each address became its own aggregation key and the same logical class appeared as N separate rows in the top-N list. Arrow-targeted entries (e.g. `_object --> <NSObject 0xADDR>`) now aggregate correctly with the root-level form. 5 new unit tests cover the new patterns (with size, without size, after arrow, namespaced names like `SwiftUI.ViewGraph`, allocator-in-brackets filtering).
+
+- **Classifier escalation tightened (`analyzeAbandonedMemory.classifyGrowth`).** Three guards added to the KVO co-occurrence path so framework noise stops getting tagged `kvo-observer-orphaned high` whenever `NSKeyValueObservance` grows: (1) `isFrameworkNoise()` filter rejects allocator stacks, memory zones, `__DATA` sections, summary rows, and Foundation collection types from escalation, (2) non-object-shaped candidates (bracketed anonymous forms `<X 0xADDR> [size]`, byte-offset prefixes like `8600 bytes into ...`) are rejected, (3) proportional thresholds replace the flat `delta >= 5` rule (medium requires `delta >= max(5, kvoObservanceDelta * 0.5)`; high requires `delta >= max(50, kvoObservanceDelta * 5)`). On the notelet swapped-direction analysis the false-positive count dropped from 25 high-confidence-tagged classes to ~1 (AVPlayerItem alone, correctly). 7 new unit tests cover the three guards plus the existing classifier paths.
+
+### Fixed
+
+- The notelet-followup post draft's claim that `analyzeAbandonedMemory` "tags AVPlayerItem with kvo-observer-orphaned at high confidence in one call" is now reproducible on v1.10 (was technically incorrect on v1.9 against the cited memgraphs; v1.9's parser left AVPlayerItem at rank ~82 and the over-broad classifier obscured it under 25 false positives).
+
 ## [1.9.0] - 2026-05-14
 
 ### Added
@@ -385,7 +409,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.8.1...v1.9.0
 [1.4.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.0...v1.3.1
