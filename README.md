@@ -458,20 +458,23 @@ Investigation playbooks are exposed as MCP prompts (slash commands in clients th
 | `/investigate-launch` | Diagnose cold/warm launch slowness from a `.trace`. | `tracePath` |
 | `/verify-cycle-fix` | Diff a before/after pair of `.memgraph` snapshots to confirm a fix landed. | `before`, `after` |
 
-Each prompt fills the canonical playbook's argument templates with the user-provided values, then hands the agent a ready-to-execute brief. Calls the same tools listed in [Read & analyze](#read--analyze-13). Prompts are an orchestration shortcut, not a separate engine.
+Each prompt fills the canonical playbook's argument templates with the user-provided values, then hands the agent a ready-to-execute brief. Calls the same tools listed in [Read & analyze](#read--analyze-14). Prompts are an orchestration shortcut, not a separate engine.
 
 ### CLI mode
 
 The same binary is also a thin CLI for scripting and CI:
 
 ```bash
-memorydetective analyze   <path-to-.memgraph>    # totals, ROOT CYCLEs, diagnosis
-memorydetective classify  <path-to-.memgraph>    # match patterns + render fix hint
+memorydetective analyze   <path-to-.memgraph>          # totals, ROOT CYCLEs, diagnosis
+memorydetective classify  <path-to-.memgraph>          # match patterns + render fix hint
+memorydetective tool      <toolName> --input <json>    # generic dispatcher for any MCP tool
 memorydetective --help
 memorydetective --version
 ```
 
 When called with no arguments, the binary starts as an MCP server over stdio.
+
+The `tool` subcommand dispatches to any registered MCP tool by name, reading inputs from a JSON file. Exit code is `0` when the tool returns `ok && passed !== false`, `1` otherwise, so it slots cleanly into CI gates. Currently supported tool names: `detectLeaksInXCTest`, `detectLeaksInXCUITest` (the [CI recipe](#add-memorydetective-to-your-ci-in-5-minutes) above uses this).
 
 ---
 
@@ -486,7 +489,7 @@ When called with no arguments, the binary starts as an MCP server over stdio.
 git clone https://github.com/carloshpdoc/memorydetective
 cd memorydetective
 npm install
-npm test                  # 61 unit tests
+npm test                  # 457 unit tests
 npm run build             # build → dist/
 npm run dev               # tsx, stdio mode (dev mode)
 ./scripts/demo.sh         # full demo against a real .memgraph (set MEMGRAPH=path)
@@ -497,11 +500,11 @@ npm run dev               # tsx, stdio mode (dev mode)
 Contributions are welcome. Bug reports, feature requests, new cycle patterns, all of it.
 
 - **Bugs / feature requests**: [open an issue](https://github.com/carloshpdoc/memorydetective/issues).
-- **PRs**: fork → branch → `npm install` → make changes → `npm test` (206 tests must stay green) → open a PR with a concise description of what changed and why.
+- **PRs**: fork → branch → `npm install` → make changes → `npm test` (457 tests must stay green) → open a PR with a concise description of what changed and why.
 
 ### Adding a cycle pattern to `classifyCycle`
 
-`classifyCycle` ships with 34 built-in patterns covering SwiftUI (incl. Swift 6 / `@Observable` / SwiftData / NavigationStack), Combine, Swift Concurrency (incl. AsyncSequence-on-self and `Observations`), UIKit (Timer / CADisplayLink / UIGestureRecognizer / KVO / URLSession / WebKit / DispatchSource), Core Animation, Core Data, the Coordinator pattern, RxSwift, and Realm. To add one:
+`classifyCycle` ships with 36 built-in patterns covering SwiftUI (incl. Swift 6 / `@Observable` / SwiftData / NavigationStack / the v1.9 `observable-write-on-every-render` and `viewcontroller-retained-after-pop` shapes), Combine, Swift Concurrency (incl. AsyncSequence-on-self and `Observations`), UIKit (Timer / CADisplayLink / UIGestureRecognizer / KVO / URLSession / WebKit / DispatchSource), Core Animation, Core Data, the Coordinator pattern, RxSwift, and Realm. To add one:
 
 1. Edit `src/tools/classifyCycle.ts`. Add an entry to `PATTERNS` with `id`, `name`, `fixHint`, and a `match` function.
 2. Add a test in `src/tools/readTools.test.ts` that asserts the new pattern fires against a representative memgraph fixture.
