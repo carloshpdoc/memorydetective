@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-05-14
+
+Three-fix patch driven by the v1.10 validation pass on the global npm binary. The v1.10 retro §7 surfaced gaps that v1.11 closes: CLI human-output ignored the new abandoned-memory data, `diffMemgraphs` had the same reference-tree blind spot v1.10 fixed only in `analyzeMemgraph` + `analyzeAbandonedMemory`, and there was no orientation tool for `.trace` bundles.
+
+### Added
+
+- **`inspectTrace(tracePath)` MCP tool (35th tool, `[mg.discover]`).** Orientation tool for `.trace` bundles: single-call `xcrun xctrace export --xpath '/trace-toc/run'` invocation returns the schemas present, their row counts, the device model, OS version, template name, recording timestamp, file size, and a `suggestedNextCalls[]` array mapping each populated known schema (`potential-hangs`, `animation-hitches`, `time-profile`, `allocations`, `app-launch`) to its analyzer with pre-populated args. Closes the discovery gap vs XcodeTraceMCP without surrendering the synthesis differentiator: the analyzer mappings carry one-sentence rationales explaining what each call would return. Fallback path: when `/trace-toc/run` returns non-zero (older xctrace versions, malformed TOC), retries with the broader `/trace-toc` xpath. Empty traces return `schemas: []` with a diagnosis pointing at Instruments.app for manual triage. 9 new unit tests cover full-TOC parse, row counts + sort order, all run-level metadata fields, analyzer-suggestion mapping for known + custom + empty schemas, empty TOC, malformed XML graceful degradation.
+
+- **`diffMemgraphs` reference-tree integration.** v1.10 fixed `analyzeMemgraph` and `analyzeAbandonedMemory` to read the reference-tree output but `diffMemgraphs` still operated on cycle data only. On the notelet pair (`leakCount: 0` both sides) the response came back with empty `classCountChanges`, zero delta, and the AVPlayerItem 342 to 0 finding completely invisible. v1.11 adds: a pure `diffReferenceTrees()` helper, a `captureReferenceTree()` wrapper that spawns `leaks --referenceTree --groupByType --noContent` against each `.memgraph` in parallel with the existing cycle pass (4 spawns total, parallelized via Promise.all so wall-clock unchanged), and three new response fields: `referenceTreeChanges.{increased,decreased}` (raw view), `actionableReferenceTreeChanges.{increased,decreased}` (filtered via `isFrameworkNoise` to surface AV / KVO / app-level classes), and `totals.referenceTreeInstanceDelta` + `referenceTreeBytesDelta` (heap-wide single-number branching). Validation on the notelet pair: `actionableReferenceTreeChanges.decreased` leads with AVCMNotificationDispatcher (1802 to 4, -1798), __NSObserver (665 to 7, -658), AVCMNotificationDispatcherListenerKey (603 to 0, -603), AVPlayerItem (342 to 0, -342), and the full AV plumbing tree the notelet fix freed. 4 new unit tests for the pure `diffReferenceTrees` helper.
+
+- **CLI human-output abandoned-memory surface.** `memorydetective analyze leak.memgraph` (no `--json` flag) now renders a top-5 suspects mini-table below the Diagnosis line when `abandonedMemorySuspects[]` is populated. 3 columns (Class, Instances, Bytes), locale-formatted counts for skimmability, name padded to actual width (capped at 56 chars). Footer hint pointing to `--json` for the full top-20 plus the raw `abandonedMemoryTop` view. Suppressed when the suspects field is empty (cycle-shape memgraphs unchanged). `memorydetective classify` adds a one-line tip at the bottom when `result.classified` is empty, pointing the user at `analyze` for the abandoned-memory view. Closes the v1.10 retro §7.1 gap where terminal users saw "No leaks detected" and walked away from real bugs.
+
+### Changed
+
+- `package.json` + `server.json`: 1.10.0 → 1.11.0.
+
+### Known structural gaps deferred to v1.12+
+
+The v1.10 retro §7.2 listed 4 tools (`countAlive`, `findRetainers`, `diffMemgraphs`, `verifyFix`) with the same reference-tree blind spot as v1.9-era `analyzeMemgraph`. v1.11 closes `diffMemgraphs` (the cheapest of the four); the remaining 3 are deferred to v1.12.
+
 ## [1.10.0] - 2026-05-14
 
 Notelet retro feedback loop: re-running the v1.9 abandoned-memory tools against the same memgraphs that originally drove the v1.9.0 release surfaced three concrete gaps. This minor patches all of them so the notelet investigation's headline finding (AVPlayerItem went 342 to 0, KVO observer never invalidated) is reproducible end-to-end via JSON instead of requiring a manual `leaks --debug=stacks` grep.
@@ -409,7 +429,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.8.1...v1.9.0
 [1.4.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.3.1...v1.4.0
