@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-05-15
+
+macOS 26.x recording-unblock release. The single feature that v1.14 punted on. `xcrun xctrace record --time-limit Ns` is broken on macOS 26.x simulator targets (documented in v1.14). Instruments.app GUI still produces valid `.trace` bundles. v1.16 ships the wrapper that automates the surrounding choreography: open the app, prompt the user with step-by-step instructions, poll for the saved trace, chain into `inspectTrace` on success. 41 MCP tools, 677 tests.
+
+### Added
+
+- **`recordViaInstrumentsApp` MCP tool (41st, `[mg.build]`).** The macOS 26.x escape hatch. Opens Instruments.app via `open -a Instruments`, returns an `instructions[]` array telling the user which template to pick + when to hit Record / Stop / Save, then polls a `watchDir` every 5s for new `.trace` bundles. A bundle is treated as "saved" when its mtime is stable for 10s. On detection, chains into `inspectTrace` and returns the trace path + schemas + diagnosis. Times out after `timeoutSec` (default 600s, max 3600s). Why user-in-loop? Instruments.app's AppleScript surface only exposes queries on the `document` class (`name`, `modified`, `file`), no verbs for start/stop/template-select - documented in `Xcode.app/.../Instruments.sdef`. Full GUI automation is impossible until Apple expands the dictionary. README workaround callout + USAGE.md Troubleshooting recovery list updated to point at this tool as the v1.16 escape hatch (formerly: "wait for Apple"). 11 new tests against the watcher helpers (snapshot, new-trace detection, mtime stability, instruction text).
+
 ## [1.15.0] - 2026-05-15
 
 Schema coverage + verify-fix UX release. v1.14 fixed the trace-side pipeline and shipped network coverage. v1.15 closes the remaining trace schemas the analyzer pipeline didn't cover (memory-footprint, energy-impact, xctrace leaks-as-time-series), folds network into summarizeTrace's synthesis chain, and gives replayScenario the screenshot-per-step capability DebugSwift inspired. 5 items landed across the same day. Suite 626 -> 666 (+40). 40 MCP tools.
