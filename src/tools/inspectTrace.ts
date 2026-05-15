@@ -115,6 +115,11 @@ const SCHEMA_TO_ANALYZER: Record<
     description:
       "Per-request URL / host / method / status / response time / bytes. Top-N by duration and by bytes plus per-host aggregates.",
   },
+  "memory-footprint": {
+    tool: "analyzeMemoryFootprint",
+    description:
+      "Peak resident / dirty / virtual bytes plus per-sample timeline. The OOM-kill discriminator on iOS.",
+  },
 };
 
 /** Pure: parse the trace-toc XML payload into an inspection result. */

@@ -81,6 +81,10 @@ import {
   analyzeNetworkActivitySchema,
 } from "./tools/analyzeNetworkActivity.js";
 import {
+  analyzeMemoryFootprint,
+  analyzeMemoryFootprintSchema,
+} from "./tools/analyzeMemoryFootprint.js";
+import {
   renderCycleGraph,
   renderCycleGraphSchema,
 } from "./tools/renderCycleGraph.js";
@@ -507,6 +511,20 @@ server.registerTool(
   async (input) => {
     const result = await analyzeNetworkActivity(input);
     return formatMcpResponse(result, "analyzeNetworkActivity", input.outputFormat);
+  },
+);
+
+server.registerTool(
+  "analyzeMemoryFootprint",
+  {
+    title: "Analyze process VM footprint (resident / dirty / virtual)",
+    description:
+      "[mg.trace] Parse the `memory-footprint` schema from a `.trace` recorded with Allocations or System Trace template. Returns peak resident bytes (RAM in use), peak dirty bytes (the OOM-kill discriminator on iOS), peak VM regions, per-sample timeline. Distinct from analyzeAllocations (cumulative malloc bytes by category). Use when investigating 'why is my app getting jetsam-killed?'. v1.15+.",
+    inputSchema: analyzeMemoryFootprintSchema.shape,
+  },
+  async (input) => {
+    const result = await analyzeMemoryFootprint(input);
+    return formatMcpResponse(result, "analyzeMemoryFootprint", input.outputFormat);
   },
 );
 

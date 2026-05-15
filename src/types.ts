@@ -112,7 +112,10 @@ export type SupportStatusKind =
   | "time-profile"
   | "allocations"
   | "app-launch"
-  | "network-connections";
+  | "network-connections"
+  | "memory-footprint"
+  | "energy-impact"
+  | "leak-events";
 
 export interface SupportStatus {
   kind: SupportStatusKind;
