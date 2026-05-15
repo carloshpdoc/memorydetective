@@ -89,6 +89,10 @@ import {
   analyzeEnergyImpactSchema,
 } from "./tools/analyzeEnergyImpact.js";
 import {
+  analyzeLeakTimeline,
+  analyzeLeakTimelineSchema,
+} from "./tools/analyzeLeakTimeline.js";
+import {
   renderCycleGraph,
   renderCycleGraphSchema,
 } from "./tools/renderCycleGraph.js";
@@ -543,6 +547,20 @@ server.registerTool(
   async (input) => {
     const result = await analyzeEnergyImpact(input);
     return formatMcpResponse(result, "analyzeEnergyImpact", input.outputFormat);
+  },
+);
+
+server.registerTool(
+  "analyzeLeakTimeline",
+  {
+    title: "Analyze leaks as a time series (xctrace Leaks instrument)",
+    description:
+      "[mg.trace] Parse the `leaks` schema from a `.trace` recorded with a Leaks template. Distinct from leaks(1) CLI (snapshot): this is a time series of leak events captured throughout the recording. Returns per-class first-seen-at timestamp, peak instance count, peak bytes, event count. Useful for answering 'when in the timeline did the leak appear?' which the snapshot CLI cannot. v1.15+.",
+    inputSchema: analyzeLeakTimelineSchema.shape,
+  },
+  async (input) => {
+    const result = await analyzeLeakTimeline(input);
+    return formatMcpResponse(result, "analyzeLeakTimeline", input.outputFormat);
   },
 );
 

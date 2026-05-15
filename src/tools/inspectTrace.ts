@@ -125,6 +125,11 @@ const SCHEMA_TO_ANALYZER: Record<
     description:
       "Per-sample bucket (idle / passive / active / high), aggregate wakeups, active ratio, top samples by energy cost.",
   },
+  leaks: {
+    tool: "analyzeLeakTimeline",
+    description:
+      "Time series of leak events: per-class first-seen-at, peak count, peak bytes, event count. Answers 'when did the leak appear?'.",
+  },
 };
 
 /** Pure: parse the trace-toc XML payload into an inspection result. */
