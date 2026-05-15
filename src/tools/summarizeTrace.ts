@@ -49,6 +49,10 @@ import {
   analyzeAppLaunch,
   type AnalyzeAppLaunchResult,
 } from "./analyzeAppLaunch.js";
+import {
+  analyzeNetworkActivity,
+  type AnalyzeNetworkActivityResult,
+} from "./analyzeNetworkActivity.js";
 
 export const summarizeTraceSchema = z.object({
   tracePath: z
@@ -58,7 +62,7 @@ export const summarizeTraceSchema = z.object({
       "Absolute path to a `.trace` bundle (output of `xcrun xctrace record` or Instruments).",
     ),
   focus: z
-    .enum(["hangs", "hitches", "allocations", "launch", "all"])
+    .enum(["hangs", "hitches", "allocations", "launch", "network", "all"])
     .default("all")
     .describe(
       "When set to a specific area, the summary card emphasizes that area and downplays others. Useful for piping into more focused agent loops. Default `all`.",
@@ -116,6 +120,8 @@ export interface SummarizeTraceResult {
     timeProfile: SummarizeAreaSummary<AnalyzeTimeProfileResult>;
     allocations: SummarizeAreaSummary<AnalyzeAllocationsResult>;
     appLaunch: SummarizeAreaSummary<AnalyzeAppLaunchResult>;
+    /** v1.15: network-connections schema. Absent when the trace was recorded with a non-Network template. */
+    network: SummarizeAreaSummary<AnalyzeNetworkActivityResult>;
   };
   /** Cross-area correlations (v1.13 Phase 2). Empty when areas don't have enough data to correlate. */
   correlations: Correlation[];
@@ -131,6 +137,7 @@ const DEFAULT_TOP_N_HANGS = 10;
 const DEFAULT_TOP_N_HITCHES = 10;
 const DEFAULT_TOP_N_TIME_PROFILE = 15;
 const DEFAULT_TOP_N_ALLOCATIONS = 10;
+const DEFAULT_TOP_N_NETWORK = 10;
 
 /**
  * Build a per-area summary by running an analyzer with smart defaults
@@ -263,6 +270,13 @@ export function buildHeadline(
   }
   if (hang) {
     return `${hang.durationMs.toFixed(0)}ms hang at t=${(hang.startNs / 1e9).toFixed(2)}s. Below the 250ms user-visible threshold but still worth investigating.`;
+  }
+  // v1.15: surface network as the headline only when nothing else fired.
+  // A 3s+ request is the user-visible bar; lighter than a hang or launch
+  // miss but worth calling out when those are quiet.
+  const slowestNet = areas.network.result?.totals?.longestMs ?? 0;
+  if (slowestNet >= 3000) {
+    return `Slowest network request: ${slowestNet.toFixed(0)}ms. Likely the user-visible perf gap when no hangs / hitches fired.`;
   }
   return "No user-perceptible perf events detected in the analyzed schemas.";
 }
@@ -441,6 +455,47 @@ export function buildMarkdownCard(
     sections.push("");
   }
 
+  // Network section (v1.15). Rank by duration to highlight the calls
+  // that actually blocked the user. Per-host aggregate immediately
+  // below so chatty SDKs surface without grep.
+  if (
+    result.areas.network.status === "ok" &&
+    result.areas.network.result
+  ) {
+    const n = result.areas.network.result;
+    const totalKb = (n.totals.totalBytesIn + n.totals.totalBytesOut) / 1024;
+    sections.push(
+      `## Network (${n.totals.rows} requests, ${totalKb.toFixed(1)} KB total, slowest ${n.totals.longestMs.toFixed(0)}ms)`,
+    );
+    sections.push("");
+    const top = n.topByDuration ?? [];
+    if (top.length > 0) {
+      sections.push("| Duration | Method | Status | Bytes | URL |");
+      sections.push("|---:|---|---:|---:|---|");
+      const topNNetwork = verbose ? DEFAULT_TOP_N_NETWORK : 5;
+      for (const e of top.slice(0, topNNetwork)) {
+        const dur = e.durationMs != null ? `${e.durationMs.toFixed(0)}ms` : "n/a";
+        const bytes = (e.bytesIn ?? 0) + (e.bytesOut ?? 0);
+        const url = (e.url ?? e.host ?? "").slice(0, 60);
+        sections.push(
+          `| ${dur} | ${e.method ?? "?"} | ${e.statusCode ?? "n/a"} | ${bytes.toLocaleString()} | \`${url}\` |`,
+        );
+      }
+    }
+    if ((n.byHost ?? []).length > 0) {
+      sections.push("");
+      sections.push("**Top hosts by request count:**");
+      const topNHosts = verbose ? 8 : 3;
+      for (const h of (n.byHost ?? []).slice(0, topNHosts)) {
+        const hostKb = (h.bytesIn + h.bytesOut) / 1024;
+        sections.push(
+          `- \`${h.host}\` — ${h.count} requests, ${hostKb.toFixed(1)} KB`,
+        );
+      }
+    }
+    sections.push("");
+  }
+
   // Cross-correlations (v1.13 Phase 2). High and medium go straight
   // into the card; low-confidence entries collapsed into a single
   // "plus N more" line to keep the card compact.
@@ -499,58 +554,70 @@ export async function summarizeTrace(
 
   // Step 2: chain analyzers in parallel. Each branch is fault-tolerant
   // via buildAreaSummary so one failure doesn't tank the whole summary.
-  const [hangs, hitches, timeProfile, allocations, appLaunch] = await Promise.all([
-    buildAreaSummary(
-      "potential-hangs",
-      inspection,
-      () =>
-        analyzeHangs({
-          tracePath,
-          topN: DEFAULT_TOP_N_HANGS,
-          minDurationMs: DEFAULT_HANG_MIN_MS,
-          includeStackClassification: true,
-        }),
-      "potential-hangs schema absent from this trace.",
-    ),
-    buildAreaSummary(
-      "animation-hitches",
-      inspection,
-      () =>
-        analyzeAnimationHitches({
-          tracePath,
-          topN: DEFAULT_TOP_N_HITCHES,
-          minDurationMs: DEFAULT_HITCH_THRESHOLD_MS,
-        }),
-      "animation-hitches schema absent from this trace.",
-    ),
-    buildAreaSummary(
-      "time-profile",
-      inspection,
-      () =>
-        analyzeTimeProfile({
-          tracePath,
-          topN: DEFAULT_TOP_N_TIME_PROFILE,
-        }),
-      "time-profile schema absent from this trace.",
-    ),
-    buildAreaSummary(
-      "allocations",
-      inspection,
-      () =>
-        analyzeAllocations({
-          tracePath,
-          topN: DEFAULT_TOP_N_ALLOCATIONS,
-          minBytes: 0,
-        }),
-      "allocations schema absent from this trace.",
-    ),
-    buildAreaSummary(
-      "app-launch",
-      inspection,
-      () => analyzeAppLaunch({ tracePath }),
-      "app-launch schema absent from this trace.",
-    ),
-  ]);
+  const [hangs, hitches, timeProfile, allocations, appLaunch, network] =
+    await Promise.all([
+      buildAreaSummary(
+        "potential-hangs",
+        inspection,
+        () =>
+          analyzeHangs({
+            tracePath,
+            topN: DEFAULT_TOP_N_HANGS,
+            minDurationMs: DEFAULT_HANG_MIN_MS,
+            includeStackClassification: true,
+          }),
+        "potential-hangs schema absent from this trace.",
+      ),
+      buildAreaSummary(
+        "animation-hitches",
+        inspection,
+        () =>
+          analyzeAnimationHitches({
+            tracePath,
+            topN: DEFAULT_TOP_N_HITCHES,
+            minDurationMs: DEFAULT_HITCH_THRESHOLD_MS,
+          }),
+        "animation-hitches schema absent from this trace.",
+      ),
+      buildAreaSummary(
+        "time-profile",
+        inspection,
+        () =>
+          analyzeTimeProfile({
+            tracePath,
+            topN: DEFAULT_TOP_N_TIME_PROFILE,
+          }),
+        "time-profile schema absent from this trace.",
+      ),
+      buildAreaSummary(
+        "allocations",
+        inspection,
+        () =>
+          analyzeAllocations({
+            tracePath,
+            topN: DEFAULT_TOP_N_ALLOCATIONS,
+            minBytes: 0,
+          }),
+        "allocations schema absent from this trace.",
+      ),
+      buildAreaSummary(
+        "app-launch",
+        inspection,
+        () => analyzeAppLaunch({ tracePath }),
+        "app-launch schema absent from this trace.",
+      ),
+      buildAreaSummary(
+        "network-connections",
+        inspection,
+        () =>
+          analyzeNetworkActivity({
+            tracePath,
+            topN: DEFAULT_TOP_N_NETWORK,
+            minBytes: 0,
+          }),
+        "network-connections schema absent from this trace.",
+      ),
+    ]);
 
   const areas: SummarizeTraceResult["areas"] = {
     hangs,
@@ -558,6 +625,7 @@ export async function summarizeTrace(
     timeProfile,
     allocations,
     appLaunch,
+    network,
   };
   const correlations = buildCorrelations(areas);
   const headline = buildHeadline(areas);

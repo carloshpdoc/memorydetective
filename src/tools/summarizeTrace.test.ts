@@ -12,6 +12,7 @@ import type { AnalyzeAnimationHitchesResult } from "./analyzeAnimationHitches.js
 import type { AnalyzeTimeProfileResult } from "./analyzeTimeProfile.js";
 import type { AnalyzeAllocationsResult } from "./analyzeAllocations.js";
 import type { AnalyzeAppLaunchResult } from "./analyzeAppLaunch.js";
+import type { AnalyzeNetworkActivityResult } from "./analyzeNetworkActivity.js";
 import type { InspectTraceResult } from "./inspectTrace.js";
 
 function emptyInspection(): InspectTraceResult {
@@ -49,6 +50,7 @@ function emptyAreas(): SummarizeTraceResult["areas"] {
     timeProfile: { status: "schema-absent", diagnosis: "no time-profile" },
     allocations: { status: "schema-absent", diagnosis: "no allocations" },
     appLaunch: { status: "schema-absent", diagnosis: "no app-launch" },
+    network: { status: "schema-absent", diagnosis: "no network" },
   };
 }
 
@@ -576,5 +578,134 @@ describe("buildMarkdownCard", () => {
       false,
     );
     expect(md.length).toBeLessThan(10 * 1024);
+  });
+});
+
+function makeNetwork(
+  options: {
+    rows: number;
+    longestMs: number;
+    topUrl?: string;
+    topHost?: string;
+  } = { rows: 3, longestMs: 1000 },
+): AnalyzeNetworkActivityResult {
+  return {
+    ok: true,
+    tracePath: "/tmp/run.trace",
+    totals: {
+      rows: options.rows,
+      totalBytesIn: 12345,
+      totalBytesOut: 678,
+      longestMs: options.longestMs,
+      averageMs: options.longestMs / 2,
+      statusBuckets: { "2xx": options.rows },
+    },
+    topByDuration: [
+      {
+        startNs: 1_000_000_000,
+        durationNs: options.longestMs * 1_000_000,
+        durationMs: options.longestMs,
+        url: options.topUrl ?? "https://api.example.com/v1/users",
+        host: options.topHost ?? "api.example.com",
+        method: "GET",
+        statusCode: 200,
+        bytesIn: 8000,
+        bytesOut: 256,
+      },
+    ],
+    topByBytes: [],
+    byHost: [
+      {
+        host: options.topHost ?? "api.example.com",
+        count: options.rows,
+        bytesIn: 12345,
+        bytesOut: 678,
+        longestMs: options.longestMs,
+      },
+    ],
+    diagnosis: `${options.rows} network requests captured.`,
+    status: "available",
+    supportStatus: [
+      {
+        kind: "network-connections",
+        status: "available",
+        sourceSchemas: ["network-connections"],
+      },
+    ],
+  };
+}
+
+describe("summarizeTrace network chain (v1.15)", () => {
+  it("renders Network section when network area is OK", () => {
+    const areas = emptyAreas();
+    areas.network = {
+      status: "ok",
+      diagnosis: "",
+      result: makeNetwork({
+        rows: 4,
+        longestMs: 1200,
+        topUrl: "https://api.example.com/v1/items",
+        topHost: "api.example.com",
+      }),
+    };
+    const md = buildMarkdownCard(
+      {
+        ok: true,
+        tracePath: "/tmp/run.trace",
+        inspection: inspectionWith({ "network-connections": 4 }),
+        areas,
+        headline: buildHeadline(areas),
+      },
+      false,
+    );
+    expect(md).toContain("## Network (4 requests");
+    expect(md).toContain("1200ms");
+    expect(md).toContain("api.example.com");
+    expect(md).toContain("Top hosts by request count");
+  });
+
+  it("buildHeadline surfaces a slow network request when nothing else fired", () => {
+    const areas = emptyAreas();
+    areas.network = {
+      status: "ok",
+      diagnosis: "",
+      result: makeNetwork({ rows: 2, longestMs: 4200 }),
+    };
+    const headline = buildHeadline(areas);
+    expect(headline).toContain("4200ms");
+    expect(headline).toMatch(/network/i);
+  });
+
+  it("network section is omitted when status is schema-absent (no noise)", () => {
+    const areas = emptyAreas();
+    // Network stays as empty schema-absent.
+    const md = buildMarkdownCard(
+      {
+        ok: true,
+        tracePath: "/tmp/run.trace",
+        inspection: emptyInspection(),
+        areas,
+        headline: buildHeadline(areas),
+      },
+      false,
+    );
+    expect(md).not.toContain("## Network");
+  });
+
+  it("hangs still win over network in the headline ranking", () => {
+    const areas = emptyAreas();
+    areas.hangs = {
+      status: "ok",
+      diagnosis: "",
+      result: makeHangsResult([makeHang(800)]),
+    };
+    areas.network = {
+      status: "ok",
+      diagnosis: "",
+      result: makeNetwork({ rows: 1, longestMs: 5000 }),
+    };
+    const headline = buildHeadline(areas);
+    expect(headline).toContain("hang");
+    expect(headline).not.toContain("network request");
   });
 });
