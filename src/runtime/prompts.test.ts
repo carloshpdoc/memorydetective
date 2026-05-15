@@ -2,19 +2,22 @@ import { describe, it, expect } from "vitest";
 import { PROMPTS, findPrompt } from "./prompts.js";
 import { PLAYBOOK_KINDS } from "../tools/getInvestigationPlaybook.js";
 
-describe("MCP Prompts — investigation playbooks as slash commands", () => {
-  it("ships exactly 5 prompts, one per playbook kind", () => {
-    expect(PROMPTS.length).toBe(5);
-    expect(PROMPTS.length).toBe(PLAYBOOK_KINDS.length);
+describe("MCP Prompts (investigation playbooks as slash commands)", () => {
+  it("ships 6 prompts: 5 playbook-backed + 1 trace-summary (v1.13)", () => {
+    expect(PROMPTS.length).toBe(6);
+    // 5 of those map 1:1 to the playbook kinds.
+    const playbookPrompts = PROMPTS.filter((p) => p.name !== "summarize-trace");
+    expect(playbookPrompts.length).toBe(PLAYBOOK_KINDS.length);
   });
 
-  it("prompt names follow the investigate-* / verify-* convention", () => {
+  it("prompt names follow the investigate-* / verify-* convention + the new summarize-trace", () => {
     const names = PROMPTS.map((p) => p.name);
     expect(names).toContain("investigate-leak");
     expect(names).toContain("investigate-hangs");
     expect(names).toContain("investigate-jank");
     expect(names).toContain("investigate-launch");
     expect(names).toContain("verify-cycle-fix");
+    expect(names).toContain("summarize-trace");
   });
 
   it("each prompt declares title, description, and at least one argument", () => {

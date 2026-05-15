@@ -91,6 +91,20 @@ export const PROMPTS: PromptDefinition[] = [
       renderPlaybookPrompt(PLAYBOOKS["app-launch-slow"], { tracePath }),
   },
   {
+    name: "summarize-trace",
+    title: "Single-call cross-schema summary card for a .trace",
+    description:
+      "Call `summarizeTrace` on the user-supplied .trace and present the markdown card. Surfaces hangs, hitches, time-profile hotspots, allocations, app launch, and cross-correlations in one pass. Use this as the FIRST step on any new .trace.",
+    arguments: [
+      {
+        name: "tracePath",
+        description: "Absolute path to the .trace bundle",
+        required: true,
+      },
+    ],
+    render: ({ tracePath }) => renderSummarizeTracePrompt(tracePath),
+  },
+  {
     name: "verify-cycle-fix",
     title: "Verify a fix closed a known cycle",
     description:
@@ -114,6 +128,43 @@ export const PROMPTS: PromptDefinition[] = [
 
 export function findPrompt(name: string): PromptDefinition | undefined {
   return PROMPTS.find((p) => p.name === name);
+}
+
+/**
+ * v1.13: summarize-trace prompt. Unlike the other prompts (which render
+ * multi-step playbooks), this one wraps a single tool call. The brief
+ * tells the agent to (1) call `summarizeTrace`, (2) present the
+ * pre-rendered markdown card to the user verbatim, (3) offer to drill
+ * in via the response's `suggestedNextCalls[]`.
+ */
+function renderSummarizeTracePrompt(tracePath: string): string {
+  return [
+    `Run the **trace-summary** flow on \`${tracePath}\`.`,
+    "",
+    "## Step 1: `summarizeTrace`",
+    "",
+    "Call this tool first:",
+    "",
+    "```json",
+    `{ "tracePath": "${tracePath}" }`,
+    "```",
+    "",
+    "The response carries a structured per-area summary PLUS a pre-rendered markdown card (`result.markdown`).",
+    "",
+    "## Step 2: present the markdown card",
+    "",
+    "Show the user the `markdown` field verbatim. Do NOT re-summarize what it already says. It's been tuned for direct presentation.",
+    "",
+    "## Step 3: offer to drill in",
+    "",
+    "Each populated area carries `result.areas.<area>.result.suggestedNextCalls[]` (when present) plus `result.inspection.suggestedNextCalls[]` for the analyzer level. Surface these as concrete follow-up offers (e.g. \"Want me to run `analyzeTimeProfile` to see the top 30 symbols instead of just 15?\").",
+    "",
+    "## Do NOT",
+    "",
+    "- Propose architectural changes before the user has seen the summary.",
+    "- Re-call `summarizeTrace` to refine; pass `verbose: true` to expand or `focus: \"hangs\"` to bias instead.",
+    "- Re-call individual analyzers if the summary already answered the question.",
+  ].join("\n");
 }
 
 /**
