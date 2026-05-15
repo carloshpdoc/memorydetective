@@ -12,6 +12,7 @@ import {
   getSecurityFlags,
   maxRecordingExceededMessage,
 } from "../runtime/securityFlags.js";
+import { getPlatformAdvisory } from "../runtime/platformCheck.js";
 
 /**
  * Base shape, exposed so the MCP layer can read `.shape` (ZodEffects from
@@ -164,6 +165,117 @@ const XCTRACE_TIMEOUT_GRACE_SEC = 30;
 const XCTRACE_GRACEFUL_KILL_MS = 10_000;
 
 /**
+ * v1.14 item H. Pre-flight probe for the xctrace `--time-limit` ignore
+ * regression on macOS 26.x simulators. Runs a 2-second test recording
+ * against the same target the user requested. If the probe completes
+ * cleanly inside its wrapper window, the user's full recording is
+ * expected to behave; if the probe times out, we bail before spending
+ * the user's full `durationSec` + 30s grace window on a wedge.
+ *
+ * Returns `{ healthy: true }` when the probe exited cleanly. Returns
+ * `{ healthy: false, reason }` when the probe timed out OR when xctrace
+ * exited non-zero (the wedge does not always produce timedOut=true;
+ * sometimes xctrace exits early with a misleading error code when the
+ * sim is in a bad state). The recordTimeProfile flow treats either as
+ * "skip the full recording, return workaroundNotice now".
+ *
+ * Pre-flight is gated to ATTACH mode only. The `--launch` path would
+ * start the user's app a second time (probe launch + full-recording
+ * launch), losing first-launch state. For `--launch` callers we skip
+ * the probe and fall back to the existing 70s timeout wrapper.
+ *
+ * Exported so the gating logic can be unit-tested without spawning
+ * xctrace.
+ */
+export interface PreflightResult {
+  healthy: boolean;
+  reason?: string;
+  durationMs: number;
+}
+
+const PREFLIGHT_TIME_LIMIT_SEC = 2;
+const PREFLIGHT_WRAPPER_TIMEOUT_MS = (PREFLIGHT_TIME_LIMIT_SEC + 6) * 1000;
+const PREFLIGHT_GRACEFUL_KILL_MS = 2000;
+
+/**
+ * Returns true when a pre-flight probe should run before the user's
+ * actual recording. v1.14 item H.
+ *
+ * - `MEMORYDETECTIVE_PREFLIGHT_XCTRACE=1` forces preflight on.
+ * - `MEMORYDETECTIVE_PREFLIGHT_XCTRACE=0` forces it off.
+ * - Default: auto-enabled when host is macOS 26.x AND target is a
+ *   simulator AND attach mode (`--attach`, not `--launch`). The set of
+ *   configurations where the regression is known to fire.
+ *
+ * The `osPlatform` and `osRelease` params are threaded through to
+ * `getPlatformAdvisory` so tests can simulate non-macOS-26 hosts even
+ * when running on a real macOS 26.x machine.
+ */
+export function shouldPreflightXctrace(
+  input: RecordTimeProfileInput,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  osPlatform?: () => NodeJS.Platform,
+  osRelease?: () => string,
+): boolean {
+  const explicit = env.MEMORYDETECTIVE_PREFLIGHT_XCTRACE;
+  if (explicit === "1") return true;
+  if (explicit === "0") return false;
+  // Auto: only when the known-broken combination applies.
+  const onMacOS26 = getPlatformAdvisory(env, osPlatform, osRelease) != null;
+  const isSimTarget = !!input.simulatorId && !input.deviceId;
+  const isAttachMode = !input.launchBundleId;
+  return onMacOS26 && isSimTarget && isAttachMode;
+}
+
+/**
+ * Runs the 2-second probe. Reuses runCommand's timeout wrapper with the
+ * same SIGINT-first / SIGKILL-fallback shape that the full recording
+ * uses, so the probe's salvage behavior matches the real path.
+ *
+ * The output bundle is placed at `<output>.preflight` to keep it
+ * recognizable in cleanup tools and not collide with the user's actual
+ * output path.
+ */
+export async function preflightXctraceRecord(
+  input: RecordTimeProfileInput,
+  resolvedOutput: string,
+): Promise<PreflightResult> {
+  const probeOutput = `${resolvedOutput}.preflight`;
+  const probeInput: RecordTimeProfileInput = {
+    ...input,
+    durationSec: PREFLIGHT_TIME_LIMIT_SEC,
+    output: probeOutput,
+  };
+  const args = buildXctraceArgs(probeInput);
+  const probeOutDir = dirname(probeOutput);
+  if (!existsSync(probeOutDir)) {
+    mkdirSync(probeOutDir, { recursive: true });
+  }
+  const start = Date.now();
+  const result = await runCommand("xcrun", args, {
+    timeoutMs: PREFLIGHT_WRAPPER_TIMEOUT_MS,
+    timeoutSignal: "SIGINT",
+    gracefulKillAfterMs: PREFLIGHT_GRACEFUL_KILL_MS,
+  });
+  const durationMs = Date.now() - start;
+  if (result.timedOut) {
+    return {
+      healthy: false,
+      reason: `Pre-flight probe wedged: 2s recording exceeded ${PREFLIGHT_WRAPPER_TIMEOUT_MS / 1000}s wrapper window without exiting. The same wedge will hit the full recording.`,
+      durationMs,
+    };
+  }
+  if (result.code !== 0) {
+    return {
+      healthy: false,
+      reason: `Pre-flight probe exited non-zero (code ${result.code}): ${(result.stderr || result.stdout || "").slice(0, 200)}`,
+      durationMs,
+    };
+  }
+  return { healthy: true, durationMs };
+}
+
+/**
  * v1.14 item J. When a `recordTimeProfile` call times out, optionally
  * launch the partial `.trace` in Instruments.app so the user has a GUI
  * escape hatch. Returns `true` when `open -a Instruments <tracePath>`
@@ -238,6 +350,28 @@ export async function recordTimeProfile(
     // path came from TRACE_ROOT or was an absolute path to a missing
     // parent.
     mkdirSync(outDir, { recursive: true });
+  }
+  // v1.14 item H. Pre-flight the xctrace `--time-limit` ignore regression
+  // before spending the user's durationSec on a wedge. Gated to macOS 26.x
+  // simulator targets in attach mode by default; opt-in / opt-out via
+  // MEMORYDETECTIVE_PREFLIGHT_XCTRACE.
+  if (shouldPreflightXctrace({ ...input, output })) {
+    const probe = await preflightXctraceRecord({ ...input, output }, output);
+    if (!probe.healthy) {
+      return {
+        ok: false,
+        command: `xcrun ${buildXctraceArgs({ ...input, output }).join(" ")}`,
+        output,
+        durationSec: input.durationSec,
+        template: input.template,
+        recordingTimedOut: true,
+        workaroundNotice: {
+          issue: "xctrace-time-limit-ignored",
+          message: `Pre-flight probe detected the xctrace wedge in ${probe.durationMs}ms. Skipping the full ${input.durationSec}s recording so you do not pay the wrapper timeout. ${probe.reason ?? ""}`,
+          fallbacks: XCTRACE_TIMEOUT_FALLBACKS,
+        },
+      };
+    }
   }
   const args = buildXctraceArgs({ ...input, output });
   // External timeout wrapper. xctrace itself receives `--time-limit Ns`, so

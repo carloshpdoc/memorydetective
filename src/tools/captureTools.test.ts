@@ -5,6 +5,7 @@ import {
   buildXctraceArgs,
   maybeOpenInInstruments,
   recordTimeProfileSchema,
+  shouldPreflightXctrace,
 } from "./recordTimeProfile.js";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -309,5 +310,86 @@ describe("maybeOpenInInstruments (v1.14 item J)", () => {
 
     process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "yes";
     expect(maybeOpenInInstruments(tracePath)).toBe(false);
+  });
+});
+
+describe("shouldPreflightXctrace (v1.14 item H)", () => {
+  // The gating helper decides whether to fire the 2s probe before the
+  // user's actual recording. We test the three control axes: env flag,
+  // platform, and target/mode combination. Platform detection is
+  // injectable via osPlatform/osRelease params so tests can simulate
+  // non-macOS-26 hosts even when running on a real macOS 26.x machine.
+
+  const SIM_ATTACH_INPUT = {
+    template: "Time Profiler",
+    simulatorId: "ABCDEF12-3456",
+    attachPid: 4321,
+    durationSec: 30,
+    output: "/tmp/x.trace",
+  } as const;
+  const macOS26 = () => "darwin" as NodeJS.Platform;
+  const release26 = () => "25.4.0"; // Darwin 25.x = macOS 26.x
+  const macOS25 = () => "darwin" as NodeJS.Platform;
+  const release25 = () => "24.4.0"; // Darwin 24.x = macOS 25 / Sequoia
+
+  it("env=1 forces preflight ON regardless of platform or target", () => {
+    const env = { MEMORYDETECTIVE_PREFLIGHT_XCTRACE: "1" };
+    expect(
+      shouldPreflightXctrace(SIM_ATTACH_INPUT, env, macOS25, release25),
+    ).toBe(true);
+  });
+
+  it("env=0 forces preflight OFF even on macOS 26.x sim attach", () => {
+    const env = { MEMORYDETECTIVE_PREFLIGHT_XCTRACE: "0" };
+    expect(
+      shouldPreflightXctrace(SIM_ATTACH_INPUT, env, macOS26, release26),
+    ).toBe(false);
+  });
+
+  it("default auto-enables on macOS 26.x sim attach (the known-broken combo)", () => {
+    expect(
+      shouldPreflightXctrace(SIM_ATTACH_INPUT, {}, macOS26, release26),
+    ).toBe(true);
+  });
+
+  it("default skips on macOS 25 (no regression there)", () => {
+    expect(
+      shouldPreflightXctrace(SIM_ATTACH_INPUT, {}, macOS25, release25),
+    ).toBe(false);
+  });
+
+  it("default skips on physical device targets even on macOS 26.x", () => {
+    const physicalDeviceInput = {
+      ...SIM_ATTACH_INPUT,
+      simulatorId: undefined,
+      deviceId: "00008150-001E449E1E99401C",
+    };
+    expect(
+      shouldPreflightXctrace(physicalDeviceInput, {}, macOS26, release26),
+    ).toBe(false);
+  });
+
+  it("default skips --launch mode (would double-launch the app)", () => {
+    const launchInput = {
+      template: "Time Profiler",
+      simulatorId: "ABCDEF12-3456",
+      launchBundleId: "com.example.MyApp",
+      durationSec: 30,
+      output: "/tmp/x.trace",
+    };
+    expect(shouldPreflightXctrace(launchInput, {}, macOS26, release26)).toBe(
+      false,
+    );
+  });
+
+  it("MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1 disables the auto-enable path", () => {
+    // The macOS advisory short-circuits when the suppress flag is set,
+    // so the auto-enable arm also short-circuits. Useful for users who
+    // have decided on a workaround and want to keep recordTimeProfile
+    // fast-path.
+    const env = { MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY: "1" };
+    expect(
+      shouldPreflightXctrace(SIM_ATTACH_INPUT, env, macOS26, release26),
+    ).toBe(false);
   });
 });
