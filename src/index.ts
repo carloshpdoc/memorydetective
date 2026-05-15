@@ -41,6 +41,10 @@ import {
   inspectTraceSchema,
 } from "./tools/inspectTrace.js";
 import {
+  summarizeTrace,
+  summarizeTraceSchema,
+} from "./tools/summarizeTrace.js";
+import {
   recordTimeProfile,
   recordTimeProfileShape,
 } from "./tools/recordTimeProfile.js";
@@ -340,6 +344,22 @@ server.registerTool(
   },
   async (input) => {
     const result = await inspectTrace(input);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  },
+);
+
+server.registerTool(
+  "summarizeTrace",
+  {
+    title: "Single-call cross-schema summary card for a .trace bundle",
+    description:
+      "[mg.synthesize] The trace-to-summary-card-in-one-call play. Chains `inspectTrace` + the matching `analyze*` tools (potential-hangs, animation-hitches, time-profile, allocations, app-launch) and returns BOTH a structured per-area result AND a pre-rendered compact markdown card (< 10 KB at default settings). Use this as the FIRST call when handed a `.trace` if you want one synthesis pass instead of chaining 5-6 analyzers manually. The markdown card carries a 1-sentence headline naming the biggest user-impact finding, then per-area sub-sections, then `suggestedNextCalls[]` for drilling in. Empty schemas are suppressed from the card to reduce noise. Failed analyzers (e.g. xctrace SIGSEGV on time-profile) surface inline with their workaround notice. Pass `verbose: true` to expand each section's top-N from 5 to 15+. Pass `focus: \"hangs\" | \"hitches\" | \"allocations\" | \"launch\"` to bias the summary toward a specific area.",
+    inputSchema: summarizeTraceSchema.shape,
+  },
+  async (input) => {
+    const result = await summarizeTrace(input);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
