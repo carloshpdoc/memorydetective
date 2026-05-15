@@ -101,3 +101,35 @@ describe("resolveTapTarget", () => {
     ).toThrow(/exactly one of/);
   });
 });
+
+describe("replayScenario screenshot schema (v1.15 item N)", () => {
+  it("accepts the new screenshotDir field", async () => {
+    const { replayScenarioSchema } = await import("./replayScenario.js");
+    const parsed = replayScenarioSchema.parse({
+      simulatorUDID: "ABCD-1234",
+      actions: [{ type: "tap", label: "Explore" }],
+      screenshotDir: "/tmp/screens",
+    });
+    expect(parsed.screenshotDir).toBe("/tmp/screens");
+  });
+
+  it("screenshotDir is optional (backwards compat)", async () => {
+    const { replayScenarioSchema } = await import("./replayScenario.js");
+    const parsed = replayScenarioSchema.parse({
+      simulatorUDID: "ABCD-1234",
+      actions: [{ type: "tap", label: "Explore" }],
+    });
+    expect(parsed.screenshotDir).toBeUndefined();
+  });
+
+  it("rejects non-string screenshotDir", async () => {
+    const { replayScenarioSchema } = await import("./replayScenario.js");
+    expect(() =>
+      replayScenarioSchema.parse({
+        simulatorUDID: "ABCD-1234",
+        actions: [{ type: "tap", label: "Explore" }],
+        screenshotDir: 42 as unknown as string,
+      }),
+    ).toThrow();
+  });
+});

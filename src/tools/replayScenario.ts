@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { existsSync, mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { dirname, join as joinPath } from "node:path";
 import {
   checkAxeAvailable,
   describeUI,
@@ -21,6 +22,7 @@ import {
   typeText,
   type TapTarget,
 } from "../runtime/axe.js";
+import { runCommand } from "../runtime/exec.js";
 
 const tapActionSchema = z.object({
   type: z.literal("tap"),
@@ -105,6 +107,12 @@ export const replayScenarioShape = {
     .describe(
       "When provided, after the scenario completes the final UI tree is written here as JSON for the caller to verify the app ended in the expected state.",
     ),
+  screenshotDir: z
+    .string()
+    .optional()
+    .describe(
+      "v1.15+. DebugSwift-inspired. When provided, captures a simulator screenshot after each action into `<screenshotDir>/iteration-{N}_step-{M}.png`. Useful for 'what was on screen when the leak fired?' context in verify-fix loops. Uses `xcrun simctl io ... screenshot` directly (no axe dependency). Screenshot capture failures are non-fatal: surfaced in `failures[]` but do not halt the scenario.",
+    ),
 } as const;
 
 export const replayScenarioSchema = z.object(replayScenarioShape);
@@ -128,6 +136,8 @@ export interface ReplayScenarioResult {
   failures: ReplayScenarioFailure[];
   totalDurationMs: number;
   finalUITreePath?: string;
+  /** v1.15+. When screenshotDir was provided, the absolute paths of the captured PNGs in order. Empty array when screenshotDir was omitted. */
+  screenshotPaths?: string[];
   workaroundNotice?: ReplayScenarioWorkaroundNotice;
 }
 
@@ -152,7 +162,25 @@ export async function replayScenario(
 
   const start = Date.now();
   const failures: ReplayScenarioFailure[] = [];
+  const screenshotPaths: string[] = [];
   let executedSteps = 0;
+
+  // v1.15: prepare the screenshot directory upfront so the loop does not
+  // mkdir on every iteration. Failure to create the dir is non-fatal:
+  // we just skip screenshots and record the issue on `failures[]`.
+  let screenshotDirReady = false;
+  if (input.screenshotDir) {
+    try {
+      mkdirSync(input.screenshotDir, { recursive: true });
+      screenshotDirReady = true;
+    } catch (err) {
+      failures.push({
+        iteration: 0,
+        stepIndex: 0,
+        reason: `Failed to create screenshotDir: ${(err as Error).message}`,
+      });
+    }
+  }
 
   for (let iteration = 0; iteration < input.repeat; iteration++) {
     for (let i = 0; i < input.actions.length; i++) {
@@ -171,6 +199,27 @@ export async function replayScenario(
       }
       if (input.settleBetweenActionsMs > 0) {
         await sleep(input.settleBetweenActionsMs);
+      }
+      // v1.15: capture screenshot AFTER the settle window so the frame
+      // we save reflects post-action state, not transition state.
+      if (screenshotDirReady && input.screenshotDir) {
+        const path = joinPath(
+          input.screenshotDir,
+          `iteration-${iteration}_step-${i}.png`,
+        );
+        const captured = await captureSimulatorScreenshot(
+          input.simulatorUDID,
+          path,
+        );
+        if (captured) {
+          screenshotPaths.push(path);
+        } else {
+          failures.push({
+            iteration,
+            stepIndex: i,
+            reason: `Failed to capture screenshot at ${path}`,
+          });
+        }
       }
     }
   }
@@ -201,7 +250,40 @@ export async function replayScenario(
     failures,
     totalDurationMs: Date.now() - start,
     ...(finalUITreePath ? { finalUITreePath } : {}),
+    ...(input.screenshotDir ? { screenshotPaths } : {}),
   };
+}
+
+/**
+ * v1.15+. Run `xcrun simctl io <udid> screenshot <path>` to capture the
+ * current simulator state. Returns `true` on success, `false` on any
+ * failure (we surface failures via the `failures[]` array on the
+ * result, no exceptions thrown so the scenario continues).
+ *
+ * Exported so callers / tests can drive screenshot capture independently
+ * of the scenario loop.
+ */
+export async function captureSimulatorScreenshot(
+  udid: string,
+  outputPath: string,
+): Promise<boolean> {
+  try {
+    // Ensure the parent directory exists (replayScenario mkdir's the
+    // configured dir upfront but captureSimulatorScreenshot may be
+    // called against arbitrary nested paths).
+    const parent = dirname(outputPath);
+    if (!existsSync(parent)) {
+      mkdirSync(parent, { recursive: true });
+    }
+    const result = await runCommand(
+      "xcrun",
+      ["simctl", "io", udid, "screenshot", outputPath],
+      { timeoutMs: 30_000 },
+    );
+    return result.code === 0 && existsSync(outputPath);
+  } catch {
+    return false;
+  }
 }
 
 async function executeAction(
