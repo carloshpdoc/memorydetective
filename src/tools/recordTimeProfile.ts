@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { existsSync, mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
 import {
   resolve as resolvePath,
   dirname,
@@ -125,6 +126,16 @@ export interface RecordTimeProfileResult {
    * and the practical mitigations.
    */
   workaroundNotice?: RecordingTimeoutWorkaroundNotice;
+  /**
+   * v1.14+. `true` when, after a timed-out recording, the wrapper invoked
+   * `open -a Instruments <tracePath>` so the user can inspect the partial
+   * trace in the GUI (Instruments.app on macOS 26.x can still open and
+   * symbolicate traces the CLI export path rejects). Opt-in via
+   * `MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS=1`. `false` when the env flag is
+   * unset (default) or the trace bundle is missing from disk. Absent when
+   * the recording did not time out.
+   */
+  openedInInstrumentsApp?: boolean;
 }
 
 const XCTRACE_TIMEOUT_MESSAGE =
@@ -151,6 +162,40 @@ const XCTRACE_TIMEOUT_GRACE_SEC = 30;
  * when xctrace is wedged.
  */
 const XCTRACE_GRACEFUL_KILL_MS = 10_000;
+
+/**
+ * v1.14 item J. When a `recordTimeProfile` call times out, optionally
+ * launch the partial `.trace` in Instruments.app so the user has a GUI
+ * escape hatch. Returns `true` when `open -a Instruments <tracePath>`
+ * was spawned, `false` otherwise.
+ *
+ * Gated on `MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS=1` to avoid spamming
+ * the user's GUI on unattended runs and CI. Also requires the trace
+ * bundle to exist on disk (xctrace's SIGINT path may have failed to
+ * write anything).
+ *
+ * The `open` invocation is fire-and-forget: `detached: true` + `unref()`
+ * so the recording tool returns immediately. Failures to launch
+ * Instruments.app are swallowed; the user is no worse off than without
+ * the flag enabled.
+ *
+ * Exported so the env-gating logic can be tested without spawning
+ * Instruments in test runs.
+ */
+export function maybeOpenInInstruments(tracePath: string): boolean {
+  if (process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS !== "1") return false;
+  if (!existsSync(tracePath)) return false;
+  try {
+    const child = spawn("open", ["-a", "Instruments", tracePath], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Pure: build the xctrace argv for the given input. Exposed for testing. */
 export function buildXctraceArgs(input: RecordTimeProfileInput): string[] {
@@ -209,6 +254,7 @@ export async function recordTimeProfile(
     gracefulKillAfterMs: XCTRACE_GRACEFUL_KILL_MS,
   });
   if (result.timedOut) {
+    const openedInInstrumentsApp = maybeOpenInInstruments(output);
     return {
       ok: false,
       command: `xcrun ${args.join(" ")}`,
@@ -222,6 +268,7 @@ export async function recordTimeProfile(
         message: XCTRACE_TIMEOUT_MESSAGE,
         fallbacks: XCTRACE_TIMEOUT_FALLBACKS,
       },
+      openedInInstrumentsApp,
     };
   }
   if (result.code !== 0) {

@@ -292,6 +292,7 @@ Copilot's MCP integration moves fast. If this snippet is stale, see the [VS Code
 | `MEMORYDETECTIVE_TRACE_ROOT` | `~/Library/Application Support/memorydetective/traces` | Directory used when `recordTimeProfile.output` is a relative path. Absolute paths bypass this default for v1.8 backwards-compat. Also the default scan path for `cleanupTraces`. The directory is auto-created on first write. |
 | `MEMORYDETECTIVE_ALLOW_EXTERNAL_CLEANUP` | unset | Set to `1` to allow `cleanupTraces` to scan and delete `.trace` bundles OUTSIDE `MEMORYDETECTIVE_TRACE_ROOT`. Without it, requests that resolve outside the configured root return `ok: false` with the failure reason and delete nothing. Default-deny on destructive disk operations outside the configured boundary. |
 | `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY` | unset | Set to `1` to silence the macOS 26.x platform advisory that captureMemgraph, captureScenarioState, and bootAndLaunchForLeakInvestigation emit on first use. Useful once you have an iOS 18 sim runtime installed and do not need the reminder. |
+| `MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS` | unset | Set to `1` to make `recordTimeProfile` invoke `open -a Instruments <tracePath>` as a fire-and-forget escape hatch when xctrace times out (the macOS 26.x regression). The partial `.trace` opens in Instruments.app, which can still symbolicate + display traces the CLI export path rejects. Off by default so unattended agent runs and CI do not spam the user's GUI. The response's `openedInInstrumentsApp` field reports whether the open was invoked. |
 
 ---
 

@@ -1,10 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { parseDeviceListing } from "./listTraceDevices.js";
 import { parseTemplateListing } from "./listTraceTemplates.js";
 import {
   buildXctraceArgs,
+  maybeOpenInInstruments,
   recordTimeProfileSchema,
 } from "./recordTimeProfile.js";
+import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { captureMemgraphSchema, classifyLeaksFailure } from "./captureMemgraph.js";
 
 describe("parseDeviceListing", () => {
@@ -246,5 +250,64 @@ describe("classifyLeaksFailure", () => {
     expect(
       classifyLeaksFailure({ code: 2, stdout: "", stderr: "weird error" }, true),
     ).toBe("transient");
+  });
+});
+
+describe("maybeOpenInInstruments (v1.14 item J)", () => {
+  // The helper is the env-gate + filesystem-exists check around `open -a
+  // Instruments`. We assert behavior without actually launching Instruments
+  // by toggling the env flag and pointing at trace paths that may or may
+  // not exist on disk. The `spawn` call returns immediately via detached +
+  // unref so even when the env flag is set the test still completes
+  // synchronously; on a sandboxed CI runner the open invocation will fail
+  // harmlessly (the helper swallows the error).
+
+  const ORIGINAL_ENV = process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS;
+  let scratchDir: string;
+
+  beforeEach(() => {
+    scratchDir = join(tmpdir(), `md-auto-open-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(scratchDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = ORIGINAL_ENV;
+    try {
+      rmSync(scratchDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup failures
+    }
+  });
+
+  it("returns false when env flag is unset (default behavior, no GUI spam)", () => {
+    delete process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS;
+    const tracePath = join(scratchDir, "phantom.trace");
+    expect(maybeOpenInInstruments(tracePath)).toBe(false);
+  });
+
+  it("returns false when env flag is set but trace bundle does not exist", () => {
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "1";
+    const tracePath = join(scratchDir, "phantom.trace");
+    expect(maybeOpenInInstruments(tracePath)).toBe(false);
+  });
+
+  it("returns true when env flag is set AND trace bundle exists on disk", () => {
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "1";
+    const tracePath = join(scratchDir, "real.trace");
+    mkdirSync(tracePath); // trace bundle is a directory
+    expect(maybeOpenInInstruments(tracePath)).toBe(true);
+  });
+
+  it("rejects values other than '1' for the env flag (no accidental opt-in)", () => {
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "true";
+    const tracePath = join(scratchDir, "real.trace");
+    mkdirSync(tracePath);
+    expect(maybeOpenInInstruments(tracePath)).toBe(false);
+
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "0";
+    expect(maybeOpenInInstruments(tracePath)).toBe(false);
+
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "yes";
+    expect(maybeOpenInInstruments(tracePath)).toBe(false);
   });
 });
