@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-05-15
+
+Trace-side reliability + breadth release. v1.13 shipped `summarizeTrace`, the trace-to-summary-card-in-one-call play. v1.14 fixes two parser bugs that were causing it to return empty results against real Apple-produced traces, expands schema coverage to include hang risks + network activity, robustens the analyzer pipeline against future xctrace schema renames, and adds three opt-in UX paths around the macOS 26.x xctrace wedge regression (pre-flight probe, auto-open Instruments, README callout). Plus FLEX-inspired memgraph size view on `countAlive` and an MLeaksFinder + DebugSwift-inspired whitelist on `verifyFix`. 11 changes landed across one day. Suite 546 -> 626 (+80 tests). 37 MCP tools.
+
 ### Fixed
 
 - **`inspectTrace` + `summarizeTrace` now work against real Apple-produced `.trace` bundles.** The previous implementation ran `xctrace export --xpath '/trace-toc/run'`, which returns "This node has no content to export." against bundles produced by `xcrun xctrace record` (and by Instruments.app GUI saves). Cascaded into `summarizeTrace` reporting "No user-perceptible perf events detected" even when the trace had 35 hangs and 44k time-profile samples. Fix switches discovery to `xctrace export --toc` and adds async parallel xpath row-count queries for the 5 known analyzer schemas. `parseTraceToc` also now accepts self-closing `<table schema=X/>` (Apple's TOC shape) in addition to the open-close form (test fixtures), extracts device/OS from `<device>` attributes, and reads `<start-date>` for the recording timestamp. Validated end-to-end against a Time Profiler trace from a physical iPhone 17 Pro Max: 40 schemas detected, summarizeTrace headline becomes "1164ms hang at t=89.01s. Likely user-visible freeze." 8 new tests against the real Apple TOC fixture.
