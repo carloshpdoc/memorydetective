@@ -191,6 +191,26 @@ export interface HangEntry {
   mainThreadViolations?: MainThreadViolation[];
 }
 
+/**
+ * Entry from the `hang-risks` schema. v1.14.
+ *
+ * Different shape from `HangEntry`: `hang-risks` reports point-in-time RISK
+ * annotations emitted by the iOS runtime (e.g. "Hang Risk", "Severe Hang
+ * Risk" narrative events) rather than measured durations. No `durationNs`
+ * field exists because risks have no duration. The Severity column buckets
+ * the annotation; `backtrace` is a stringified stack at the moment the
+ * risk was annotated.
+ */
+export interface HangRiskEntry {
+  timestampNs: number;
+  timestampFmt: string;
+  severity: string;
+  eventType: string;
+  message: string;
+  threadName?: string;
+  backtrace?: string;
+}
+
 export interface AnalyzeHangsResult {
   ok: boolean;
   tracePath: string;
@@ -204,6 +224,19 @@ export interface AnalyzeHangsResult {
   };
   /** Filtered + sorted hangs, capped to topN. */
   top: HangEntry[];
+  /**
+   * v1.14: hang-risks schema events. Apple-runtime risk annotations
+   * complementary to the measured potential-hangs above. Absent when
+   * the schema was not present in the trace OR when xctrace failed to
+   * export it; present (possibly empty array) when the schema was
+   * exported successfully.
+   */
+  risks?: HangRiskEntry[];
+  /** v1.14: hang-risks aggregates. Mirrors `totals` for `top[]`. Absent when the schema was not exported. */
+  risksTotals?: {
+    rows: number;
+    bySeverity: Record<string, number>;
+  };
   diagnosis: string;
   /**
    * Disambiguates empty arrays into "no data in the trace" vs "trace could
@@ -212,7 +245,9 @@ export interface AnalyzeHangsResult {
   status: DataStatus;
 }
 
-/** Pure: turn parsed XML rows into our analyzed result. */
+/** Pure: turn parsed XML rows into our analyzed result. The optional
+ *  `hangRisksXml` (v1.14) is parsed via {@link analyzeHangRisksFromXml}
+ *  and surfaced on `result.risks[]` + `result.risksTotals`. */
 export function analyzeHangsFromXml(
   xml: string,
   tracePath: string,
@@ -220,6 +255,7 @@ export function analyzeHangsFromXml(
   minDurationMs = 0,
   timeRangeMs?: { startMs: number; endMs: number },
   topFramesByHangStartNs?: Readonly<Record<string, string>>,
+  hangRisksXml?: string,
 ): AnalyzeHangsResult {
   const tables = parseXctraceXml(xml);
   const hangsTable = tables.find((t) => t.schema === "potential-hangs");
@@ -291,12 +327,23 @@ export function analyzeHangsFromXml(
     }
   }
 
+  const risksAnalysis = hangRisksXml
+    ? analyzeHangRisksFromXml(hangRisksXml, topN)
+    : null;
+  const severeRisksCount = risksAnalysis
+    ? Object.entries(risksAnalysis.bySeverity)
+        .filter(([sev]) => /severe/i.test(sev))
+        .reduce((sum, [, n]) => sum + n, 0)
+    : undefined;
+
   const diagnosis = buildHangDiagnosis(
     filtered.length,
     hangs.length,
     microhangs.length,
     longestMs,
     averageMs,
+    risksAnalysis?.total,
+    severeRisksCount,
   );
 
   return {
@@ -311,6 +358,15 @@ export function analyzeHangsFromXml(
       totalDurationMs,
     },
     top,
+    ...(risksAnalysis
+      ? {
+          risks: risksAnalysis.rows,
+          risksTotals: {
+            rows: risksAnalysis.total,
+            bySeverity: risksAnalysis.bySeverity,
+          },
+        }
+      : {}),
     diagnosis,
     status: "available",
   };
@@ -322,19 +378,77 @@ function buildHangDiagnosis(
   microhangs: number,
   longestMs: number,
   averageMs: number,
+  risksCount?: number,
+  severeRisksCount?: number,
 ): string {
-  if (rows === 0) {
-    return "No hangs detected (or all were filtered out by minDurationMs).";
-  }
   const parts: string[] = [];
-  parts.push(`${rows} hangs total (${hangs} Hang, ${microhangs} Microhang).`);
-  parts.push(`Longest: ${longestMs.toFixed(0)}ms, average: ${averageMs.toFixed(0)}ms.`);
-  if (hangs >= 10) {
-    parts.push("Severe hang load — investigate main-thread work on the slow path.");
-  } else if (hangs > 0 && longestMs > 1000) {
-    parts.push("At least one hang over 1s — likely user-visible freeze.");
+  if (rows === 0) {
+    parts.push("No hangs detected (or all were filtered out by minDurationMs).");
+  } else {
+    parts.push(`${rows} hangs total (${hangs} Hang, ${microhangs} Microhang).`);
+    parts.push(`Longest: ${longestMs.toFixed(0)}ms, average: ${averageMs.toFixed(0)}ms.`);
+    if (hangs >= 10) {
+      parts.push("Severe hang load: investigate main-thread work on the slow path.");
+    } else if (hangs > 0 && longestMs > 1000) {
+      parts.push("At least one hang over 1s. Likely user-visible freeze.");
+    }
+  }
+  if (risksCount != null && risksCount > 0) {
+    const severeNote =
+      severeRisksCount != null && severeRisksCount > 0
+        ? `, ${severeRisksCount} severe`
+        : "";
+    parts.push(`${risksCount} hang risk annotations${severeNote} from the iOS runtime.`);
   }
   return parts.join(" ");
+}
+
+/**
+ * Pure: parse `hang-risks` schema XML into structured risk entries.
+ *
+ * v1.14. The hang-risks schema is complementary to potential-hangs: it
+ * carries runtime-emitted "Hang Risk" / "Severe Hang Risk" annotations
+ * with a backtrace at the moment of risk detection but NO measured
+ * duration. Output is sorted by timestamp ascending so callers can see
+ * the chronological order of risks during the recording.
+ *
+ * Returns `{ rows: [], bySeverity: {} }` when the schema is absent.
+ */
+export function analyzeHangRisksFromXml(
+  xml: string,
+  topN = 10,
+): { rows: HangRiskEntry[]; total: number; bySeverity: Record<string, number> } {
+  const tables = parseXctraceXml(xml);
+  const table = tables.find((t) => t.schema === "hang-risks");
+  if (!table) return { rows: [], total: 0, bySeverity: {} };
+  const entries: HangRiskEntry[] = [];
+  const bySeverity: Record<string, number> = {};
+  for (const row of table.rows) {
+    const timestampNs = asNumber(row.time) ?? 0;
+    const severity = asFormatted(row.severity) ?? "";
+    const eventType = asFormatted(row["event-type"]) ?? "";
+    const message = asFormatted(row.message) ?? "";
+    const threadName = asFormatted(row.thread) ?? undefined;
+    const backtrace = asFormatted(row.backtrace) ?? undefined;
+    entries.push({
+      timestampNs,
+      timestampFmt: asFormatted(row.time) ?? "",
+      severity,
+      eventType,
+      message,
+      ...(threadName ? { threadName } : {}),
+      ...(backtrace ? { backtrace } : {}),
+    });
+    if (severity) {
+      bySeverity[severity] = (bySeverity[severity] ?? 0) + 1;
+    }
+  }
+  entries.sort((a, b) => a.timestampNs - b.timestampNs);
+  return {
+    rows: entries.slice(0, topN),
+    total: entries.length,
+    bySeverity,
+  };
 }
 
 /**
@@ -454,7 +568,7 @@ export async function analyzeHangs(
     throw new Error(`Trace bundle not found: ${tracePath}`);
   }
   const wantStackClassification = input.includeStackClassification ?? false;
-  const [hangsResult, timeProfileRows] = await Promise.all([
+  const [hangsResult, hangRisksResult, timeProfileRows] = await Promise.all([
     runCommand(
       "xcrun",
       [
@@ -464,6 +578,22 @@ export async function analyzeHangs(
         tracePath,
         "--xpath",
         '/trace-toc/run/data/table[@schema="potential-hangs"]',
+      ],
+      { timeoutMs: 5 * 60_000 },
+    ),
+    // v1.14: fetch the complementary hang-risks schema in parallel. The
+    // schema is optional (some templates omit it). Failure here is non-
+    // fatal: the result is rolled into `risks?` only when xctrace returned
+    // a parseable export.
+    runCommand(
+      "xcrun",
+      [
+        "xctrace",
+        "export",
+        "--input",
+        tracePath,
+        "--xpath",
+        '/trace-toc/run/data/table[@schema="hang-risks"]',
       ],
       { timeoutMs: 5 * 60_000 },
     ),
@@ -482,6 +612,10 @@ export async function analyzeHangs(
       `xctrace export failed (code ${hangsResult.code}): ${hangsResult.stderr || hangsResult.stdout}`,
     );
   }
+  // hang-risks: only surface when the export succeeded. Anything else
+  // (xctrace error, parse failure, empty schema) -> drop without error.
+  const hangRisksXml =
+    hangRisksResult.code === 0 && hangRisksResult.stdout ? hangRisksResult.stdout : undefined;
 
   // Build the supplemental top-frames map. Caller-supplied map takes
   // precedence over the v1.12 auto-correlation so users who pre-built a
@@ -516,5 +650,6 @@ export async function analyzeHangs(
     input.minDurationMs ?? 0,
     input.timeRangeMs,
     topFramesMap,
+    hangRisksXml,
   );
 }

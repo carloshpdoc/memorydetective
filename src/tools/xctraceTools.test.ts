@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import {
   analyzeHangsFromXml,
+  analyzeHangRisksFromXml,
   classifyHangFrame,
   hangFrameMapKey,
   correlateTimeProfileToHangs,
@@ -169,6 +170,140 @@ describe("analyzeHangsFromXml", () => {
       map,
     );
     expect(enriched.top[0].mainThreadViolations).toEqual([]);
+  });
+});
+
+// v1.14 item F: hang-risks schema. Different shape from potential-hangs
+// (annotations, not measured durations). Reported alongside under
+// `result.risks[]` + `result.risksTotals` when the schema is exported.
+const HANG_RISKS_FIXTURE = `<?xml version="1.0"?>
+<trace-query-result>
+<node><schema name="hang-risks">
+<col><mnemonic>time</mnemonic><name>Timestamp</name><engineering-type>event-time</engineering-type></col>
+<col><mnemonic>process</mnemonic><name>Process</name><engineering-type>process</engineering-type></col>
+<col><mnemonic>message</mnemonic><name>Message</name><engineering-type>narrative</engineering-type></col>
+<col><mnemonic>severity</mnemonic><name>Severity</name><engineering-type>short-string</engineering-type></col>
+<col><mnemonic>event-type</mnemonic><name>Event Type</name><engineering-type>event-type</engineering-type></col>
+<col><mnemonic>backtrace</mnemonic><name>Backtrace</name><engineering-type>text-backtrace</engineering-type></col>
+<col><mnemonic>thread</mnemonic><name>Thread</name><engineering-type>thread</engineering-type></col>
+</schema>
+<row>
+<time id="1" fmt="00:00:01.500">1500000000</time>
+<process id="2" fmt="DemoApp"/>
+<message id="3" fmt="Main thread stalled for 280ms"/>
+<severity id="4" fmt="Hang Risk"/>
+<event-type id="5" fmt="narrative"/>
+<backtrace id="6" fmt="pthread_mutex_lock\nNSPersistentStoreCoordinator lock"/>
+<thread id="7" fmt="Main Thread"/>
+</row>
+<row>
+<time id="8" fmt="00:00:03.800">3800000000</time>
+<process ref="2"/>
+<message id="9" fmt="Main thread stalled for 1200ms"/>
+<severity id="10" fmt="Severe Hang Risk"/>
+<event-type ref="5"/>
+<backtrace id="11" fmt="dispatch_semaphore_wait"/>
+<thread ref="7"/>
+</row>
+<row>
+<time id="12" fmt="00:00:05.200">5200000000</time>
+<process ref="2"/>
+<message id="13" fmt="Main thread stalled for 350ms"/>
+<severity id="14" fmt="Hang Risk"/>
+<event-type ref="5"/>
+<backtrace id="15" fmt="CFReadStreamRead"/>
+<thread ref="7"/>
+</row>
+</node></trace-query-result>`;
+
+const HANG_RISKS_EMPTY_FIXTURE = `<?xml version="1.0"?>
+<trace-query-result>
+<node><schema name="hang-risks">
+<col><mnemonic>time</mnemonic><name>Timestamp</name><engineering-type>event-time</engineering-type></col>
+<col><mnemonic>severity</mnemonic><name>Severity</name><engineering-type>short-string</engineering-type></col>
+</schema>
+</node></trace-query-result>`;
+
+describe("analyzeHangRisksFromXml (v1.14 item F)", () => {
+  it("parses risk rows with timestamp, severity, message, backtrace", () => {
+    const r = analyzeHangRisksFromXml(HANG_RISKS_FIXTURE);
+    expect(r.total).toBe(3);
+    expect(r.rows).toHaveLength(3);
+    expect(r.rows[0].severity).toBe("Hang Risk");
+    expect(r.rows[0].message).toBe("Main thread stalled for 280ms");
+    expect(r.rows[1].severity).toBe("Severe Hang Risk");
+    expect(r.rows[2].backtrace).toBe("CFReadStreamRead");
+  });
+
+  it("buckets bySeverity for the diagnosis layer to surface severe count", () => {
+    const r = analyzeHangRisksFromXml(HANG_RISKS_FIXTURE);
+    expect(r.bySeverity).toEqual({
+      "Hang Risk": 2,
+      "Severe Hang Risk": 1,
+    });
+  });
+
+  it("sorts risks by timestamp ascending (chronological order during recording)", () => {
+    const r = analyzeHangRisksFromXml(HANG_RISKS_FIXTURE);
+    expect(r.rows[0].timestampNs).toBeLessThan(r.rows[1].timestampNs);
+    expect(r.rows[1].timestampNs).toBeLessThan(r.rows[2].timestampNs);
+  });
+
+  it("returns empty result + empty bySeverity when the schema has no rows", () => {
+    const r = analyzeHangRisksFromXml(HANG_RISKS_EMPTY_FIXTURE);
+    expect(r.total).toBe(0);
+    expect(r.rows).toEqual([]);
+    expect(r.bySeverity).toEqual({});
+  });
+
+  it("returns empty result when the schema is absent entirely (graceful degradation)", () => {
+    const r = analyzeHangRisksFromXml("<garbage/>");
+    expect(r.total).toBe(0);
+    expect(r.rows).toEqual([]);
+  });
+
+  it("respects topN by truncating after sort", () => {
+    const r = analyzeHangRisksFromXml(HANG_RISKS_FIXTURE, 2);
+    expect(r.rows).toHaveLength(2);
+    expect(r.total).toBe(3); // total tracks pre-truncation count
+  });
+});
+
+describe("analyzeHangsFromXml + hang-risks (integration)", () => {
+  it("attaches risks[] + risksTotals when hangRisksXml is provided", () => {
+    const result = analyzeHangsFromXml(
+      hangsXml,
+      "/fake/run.trace",
+      10,
+      0,
+      undefined,
+      undefined,
+      HANG_RISKS_FIXTURE,
+    );
+    expect(result.risks).toBeDefined();
+    expect(result.risks?.length).toBe(3);
+    expect(result.risksTotals?.rows).toBe(3);
+    expect(result.risksTotals?.bySeverity["Severe Hang Risk"]).toBe(1);
+  });
+
+  it("omits risks fields when hangRisksXml is not provided (backwards compat)", () => {
+    const result = analyzeHangsFromXml(hangsXml, "/fake/run.trace");
+    expect(result.risks).toBeUndefined();
+    expect(result.risksTotals).toBeUndefined();
+  });
+
+  it("includes risk count in diagnosis (with severe count when present)", () => {
+    const result = analyzeHangsFromXml(
+      hangsXml,
+      "/fake/run.trace",
+      10,
+      0,
+      undefined,
+      undefined,
+      HANG_RISKS_FIXTURE,
+    );
+    expect(result.diagnosis).toContain("3 hang risk annotations");
+    expect(result.diagnosis).toContain("1 severe");
   });
 });
 
