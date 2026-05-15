@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { parseLeaksOutput } from "../parsers/leaksOutput.js";
 import { findRetainersIn } from "./findRetainers.js";
-import { countByClass } from "./countAlive.js";
+import { countByClass, countByClassWithBytes } from "./countAlive.js";
 import { diffReports } from "./diffMemgraphs.js";
 import { classifyReport, PATTERNS } from "./classifyCycle.js";
 import type { CycleNode, LeaksReport } from "../types.js";
@@ -90,6 +90,80 @@ describe("countAlive schema (v1.12 includeReferenceTree)", () => {
         includeReferenceTree: "yes",
       }),
     ).toThrow();
+  });
+});
+
+describe("countAlive sortBy + instanceSize (v1.14 item L)", () => {
+  it("accepts sortBy: 'totalBytes' alongside the default 'count'", async () => {
+    const { countAliveSchema } = await import("./countAlive.js");
+    const parsed = countAliveSchema.parse({
+      path: "/tmp/x.memgraph",
+      sortBy: "totalBytes",
+    });
+    expect(parsed.sortBy).toBe("totalBytes");
+  });
+
+  it("defaults sortBy to 'count' (preserves v1.13 ranking behavior)", async () => {
+    const { countAliveSchema } = await import("./countAlive.js");
+    const parsed = countAliveSchema.parse({ path: "/tmp/x.memgraph" });
+    expect(parsed.sortBy).toBe("count");
+  });
+
+  it("rejects unknown sortBy values", async () => {
+    const { countAliveSchema } = await import("./countAlive.js");
+    expect(() =>
+      countAliveSchema.parse({
+        path: "/tmp/x.memgraph",
+        sortBy: "alphabetical",
+      }),
+    ).toThrow();
+  });
+
+  it("countByClassWithBytes aggregates totalBytes + instanceSizeBytes per class", () => {
+    const report = parseLeaksOutput(leaksText);
+    const acc = countByClassWithBytes(report);
+    // DetailViewModel should be present with at least one instance and
+    // a non-zero totalBytes (the leaks fixture annotates [N] bytes).
+    const dvm = acc.get("DetailViewModel");
+    expect(dvm).toBeDefined();
+    expect(dvm!.count).toBeGreaterThan(0);
+    // instanceSizeBytes is the first non-null size observed; totalBytes
+    // is the sum across all occurrences. Sum >= single size when count>=1.
+    if (dvm!.instanceSizeBytes != null) {
+      expect(dvm!.totalBytes).toBeGreaterThanOrEqual(dvm!.instanceSizeBytes);
+    }
+  });
+
+  it("classes without [N] annotations contribute count but not totalBytes", () => {
+    // Synthesize a minimal report where one node has instanceSize and
+    // another doesn't. countByClassWithBytes should accumulate both
+    // counts but only sum sizes from annotated nodes.
+    const node = (className: string, instanceSize?: number): CycleNode => ({
+      raw: `${className}<0xdead> [${instanceSize ?? "?"}]`,
+      retainKind: "ROOT_CYCLE",
+      className,
+      address: "0xdead",
+      ...(instanceSize != null ? { instanceSize } : {}),
+      isRootCycle: true,
+      isCycleBack: false,
+      indent: 0,
+      children: [],
+    });
+    const fakeReport: LeaksReport = {
+      header: { processName: "Demo", pid: 0, sourcePath: "/dev/null" },
+      totals: { leaks: 2, rootCycles: 1, indirectLeaks: 0 },
+      cycles: [
+        { ...node("Foo", 48) },
+        { ...node("Foo", undefined) },
+        { ...node("Foo", 48) },
+      ],
+    };
+    const acc = countByClassWithBytes(fakeReport);
+    expect(acc.get("Foo")).toEqual({
+      count: 3,
+      totalBytes: 96, // 48 + 48 (the unsized one doesn't contribute)
+      instanceSizeBytes: 48,
+    });
   });
 });
 
