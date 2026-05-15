@@ -8,7 +8,7 @@ import {
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
-import type { DataStatus } from "../types.js";
+import type { DataStatus, SupportStatus } from "../types.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeAnimationHitchesSchema = z.object({
@@ -75,8 +75,12 @@ export interface AnalyzeAnimationHitchesResult {
   /**
    * Disambiguates empty arrays into "no data in the trace" vs "trace could
    * not be exported" vs "data was exported partially". See {@link DataStatus}.
+   *
+   * @deprecated v1.14 item I. Use `supportStatus[]` instead.
    */
   status: DataStatus;
+  /** v1.14+. Unified per-area status. See {@link SupportStatus}. */
+  supportStatus: SupportStatus[];
 }
 
 const PERCEPTIBLE_MS = 100;
@@ -106,6 +110,13 @@ export function analyzeAnimationHitchesFromXml(
       top: [],
       diagnosis: "No animation-hitches table found in the trace.",
       status: "not_present",
+      supportStatus: [
+        {
+          kind: "animation-hitches",
+          status: "not_present",
+          reason: "Schema absent from the trace TOC.",
+        },
+      ],
     };
   }
 
@@ -165,6 +176,13 @@ export function analyzeAnimationHitchesFromXml(
     top,
     diagnosis,
     status: "available",
+    supportStatus: [
+      {
+        kind: "animation-hitches",
+        status: "available",
+        sourceSchemas: ["animation-hitches"],
+      },
+    ],
   };
 }
 

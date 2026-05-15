@@ -8,7 +8,7 @@ import {
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
-import type { DataStatus } from "../types.js";
+import type { DataStatus, SupportStatus } from "../types.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeTimeProfileSchema = z.object({
@@ -47,6 +47,9 @@ export interface AnalyzeTimeProfileResult {
   /**
    * Optional notice explaining a known limitation
    * (e.g. xctrace crashed exporting the time-profile schema).
+   *
+   * @deprecated v1.14 item I. The same information now flows through
+   * `supportStatus[0].reason`. Kept for backwards compat.
    */
   notice?: string;
   diagnosis: string;
@@ -54,8 +57,12 @@ export interface AnalyzeTimeProfileResult {
    * Disambiguates empty arrays into "no data in the trace" vs "trace
    * could not be exported" vs "data was exported partially". Agents
    * should branch on this rather than `totalSamples === 0`.
+   *
+   * @deprecated v1.14 item I. Use `supportStatus[]` instead.
    */
   status: DataStatus;
+  /** v1.14+. Unified per-area status. See {@link SupportStatus}. */
+  supportStatus: SupportStatus[];
 }
 
 /**
@@ -78,6 +85,13 @@ export function analyzeTimeProfileFromXml(
       topRows: [],
       diagnosis: "No time-profile table found in the export.",
       status: "not_present",
+      supportStatus: [
+        {
+          kind: "time-profile",
+          status: "not_present",
+          reason: "Schema absent from the trace TOC.",
+        },
+      ],
     };
   }
 
@@ -139,6 +153,13 @@ export function analyzeTimeProfileFromXml(
         ? "No samples found in the time-profile table."
         : `${rows.length} samples; top symbol: ${topSymbols[0]?.symbol ?? "unknown"} (${topSymbols[0]?.samples ?? 0} samples).`,
     status: "available",
+    supportStatus: [
+      {
+        kind: "time-profile",
+        status: "available",
+        sourceSchemas: ["time-profile"],
+      },
+    ],
   };
 }
 
@@ -200,6 +221,14 @@ export async function analyzeTimeProfile(
         diagnosis:
           "Could not export time-profile schema (xctrace crashed). See `notice` for workarounds.",
         status: "not_exportable",
+        supportStatus: [
+          {
+            kind: "time-profile",
+            status: "not_exportable",
+            reason: SIGSEGV_NOTICE,
+            sourceSchemas: ["time-profile"],
+          },
+        ],
       };
     }
     throw new Error(

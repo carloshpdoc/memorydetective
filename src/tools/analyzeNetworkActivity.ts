@@ -32,7 +32,7 @@ import {
   asFormatted,
   type XctraceValue,
 } from "../parsers/xctraceXml.js";
-import type { DataStatus } from "../types.js";
+import type { DataStatus, SupportStatus } from "../types.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeNetworkActivitySchema = z.object({
@@ -113,7 +113,10 @@ export interface AnalyzeNetworkActivityResult {
   /** Per-host aggregates, ranked by request count desc. */
   byHost: NetworkHostAggregate[];
   diagnosis: string;
+  /** @deprecated v1.14 item I. Use `supportStatus[]` instead. */
   status: DataStatus;
+  /** v1.14+. Unified per-area status. See {@link SupportStatus}. */
+  supportStatus: SupportStatus[];
 }
 
 /**
@@ -196,6 +199,13 @@ export function analyzeNetworkActivityFromXml(
       byHost: [],
       diagnosis: "No network-connections table found in the trace.",
       status: "not_present",
+      supportStatus: [
+        {
+          kind: "network-connections",
+          status: "not_present",
+          reason: "Schema absent from the trace TOC.",
+        },
+      ],
     };
   }
 
@@ -312,6 +322,13 @@ export function analyzeNetworkActivityFromXml(
     byHost,
     diagnosis: buildDiagnosis(entries.length, longestMs, totalBytesIn, totalBytesOut, byHost),
     status: "available",
+    supportStatus: [
+      {
+        kind: "network-connections",
+        status: "available",
+        sourceSchemas: ["network-connections"],
+      },
+    ],
   };
 }
 
@@ -393,6 +410,13 @@ export async function analyzeNetworkActivity(
       diagnosis:
         "Network schema not exportable from this trace (likely recorded with a non-Network template).",
       status: "not_present",
+      supportStatus: [
+        {
+          kind: "network-connections",
+          status: "not_exportable",
+          reason: "xctrace export failed; likely recorded with a non-Network template.",
+        },
+      ],
     };
   }
   return analyzeNetworkActivityFromXml(

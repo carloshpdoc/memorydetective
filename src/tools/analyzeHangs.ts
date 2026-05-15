@@ -8,7 +8,7 @@ import {
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
-import type { DataStatus } from "../types.js";
+import type { DataStatus, SupportStatus } from "../types.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeHangsSchema = z.object({
@@ -242,8 +242,18 @@ export interface AnalyzeHangsResult {
   /**
    * Disambiguates empty arrays into "no data in the trace" vs "trace could
    * not be exported" vs "data was exported partially". See {@link DataStatus}.
+   *
+   * @deprecated v1.14 item I. Use `supportStatus[]` instead. Kept for
+   * backwards compatibility with v1.13 callers.
    */
   status: DataStatus;
+  /**
+   * v1.14+. Unified per-area status surface. For analyzeHangs this
+   * contains one entry for the `potential-hangs` schema and a second
+   * for `hang-risks` when that schema was discovered. See {@link
+   * SupportStatus}.
+   */
+  supportStatus: SupportStatus[];
 }
 
 /** Pure: turn parsed XML rows into our analyzed result. The optional
@@ -275,6 +285,13 @@ export function analyzeHangsFromXml(
       top: [],
       diagnosis: "No potential-hangs table found in the trace.",
       status: "not_present",
+      supportStatus: [
+        {
+          kind: "potential-hangs",
+          status: "not_present",
+          reason: "Schema absent from the trace TOC.",
+        },
+      ],
     };
   }
 
@@ -370,6 +387,25 @@ export function analyzeHangsFromXml(
       : {}),
     diagnosis,
     status: "available",
+    supportStatus: [
+      {
+        kind: "potential-hangs",
+        status: "available",
+        sourceSchemas: ["potential-hangs"],
+      },
+      ...(risksAnalysis
+        ? ([
+            {
+              kind: "hang-risks",
+              status: risksAnalysis.total > 0 ? "available" : "not_present",
+              sourceSchemas: ["hang-risks"],
+              ...(risksAnalysis.total === 0
+                ? { reason: "Schema exported but no rows present." }
+                : {}),
+            },
+          ] as SupportStatus[])
+        : []),
+    ],
   };
 }
 

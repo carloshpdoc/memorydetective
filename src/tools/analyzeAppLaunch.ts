@@ -9,6 +9,7 @@ import {
   asFormatted,
 } from "../parsers/xctraceXml.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
+import type { SupportStatus } from "../types.js";
 
 export const analyzeAppLaunchSchema = z.object({
   tracePath: z
@@ -55,6 +56,8 @@ export interface AnalyzeAppLaunchResult {
   /** Phase that took the largest share of launch time. */
   slowestPhase?: PhaseEntry;
   diagnosis: string;
+  /** v1.14+. Unified per-area status. See {@link SupportStatus}. */
+  supportStatus: SupportStatus[];
 }
 
 /** Pure: turn parsed XML into the structured result. */
@@ -72,6 +75,13 @@ export function analyzeAppLaunchFromXml(
       launchType: "unknown",
       phases: [],
       diagnosis: "No app-launch table found in the trace.",
+      supportStatus: [
+        {
+          kind: "app-launch",
+          status: "not_present",
+          reason: "Schema absent from the trace TOC.",
+        },
+      ],
     };
   }
 
@@ -136,6 +146,13 @@ export function analyzeAppLaunchFromXml(
     phases,
     slowestPhase,
     diagnosis,
+    supportStatus: [
+      {
+        kind: "app-launch",
+        status: "available",
+        sourceSchemas: ["app-launch"],
+      },
+    ],
   };
 }
 

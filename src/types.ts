@@ -87,6 +87,43 @@ export type DataStatus =
   | "not_present";
 
 /**
+ * v1.14 item I. Unified per-area status surface across trace analyzers.
+ *
+ * Pre-v1.14 each analyzer had its own variation: `status: DataStatus`,
+ * an optional `notice` string for the SIGSEGV path, and ad-hoc fields
+ * for things like time-profile's workaround text. Agents had to know
+ * each shape to branch correctly. The unified `supportStatus[]` puts
+ * everything in one array of records so an LLM driver can iterate over
+ * the result without knowing the analyzer's history.
+ *
+ * Mirrors XcodeTraceMCP's `supportStatus[]` shape so cross-tool
+ * tooling can be consistent. Old `status` / `notice` fields stay on
+ * each analyzer's result as deprecated aliases for backwards compat;
+ * we'll drop them in a future major bump.
+ *
+ * `failed` is reserved for hard exceptions caught during the analyze
+ * step, distinct from `not_exportable` (xctrace ran but refused) and
+ * `not_present` (schema absent from the trace TOC).
+ */
+export type SupportStatusKind =
+  | "potential-hangs"
+  | "hang-risks"
+  | "animation-hitches"
+  | "time-profile"
+  | "allocations"
+  | "app-launch"
+  | "network-connections";
+
+export interface SupportStatus {
+  kind: SupportStatusKind;
+  status: "available" | "partial" | "not_exportable" | "not_present" | "failed";
+  /** Free-text reason: workaround tip, xctrace stderr snippet, etc. */
+  reason?: string;
+  /** Schema names this entry sourced from (e.g. ["potential-hangs", "hang-risks"]). */
+  sourceSchemas?: string[];
+}
+
+/**
  * HATEOAS-style hint that an LLM agent can chain after the current tool's
  * result. We pre-populate `args` from the current response so the agent can
  * call the next tool with one fewer inference step. The agent is free to
