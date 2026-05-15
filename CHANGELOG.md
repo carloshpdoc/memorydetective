@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-05-14
+
+Trace-depth synthesis differentiator. v1.11 added `inspectTrace` (discovery), v1.12 added cross-schema correlation inside `analyzeHangs`. v1.13 ties everything together: one call returns a cross-schema summary card tuned for direct presentation to the user, instead of chaining 5-6 analyzers manually and reasoning over the JSON.
+
+### Added
+
+- **`summarizeTrace` MCP tool (36th tool, `[mg.synthesize]`).** Single call that:
+  1. Inspects the TOC via the existing inspectTrace path.
+  2. Chains `analyzeHangs` (with `includeStackClassification: true` to auto-classify main-thread violations), `analyzeAnimationHitches` (with Apple's 100ms perceptible threshold), `analyzeTimeProfile`, `analyzeAllocations`, `analyzeAppLaunch` in parallel via Promise.all guards.
+  3. Builds cross-area correlations (Phase 2: hangs+hitches timestamp overlap detection with HIGH/MEDIUM/LOW confidence tiers).
+  4. Returns BOTH a structured per-area result AND a pre-rendered compact markdown card (< 10 KB at default settings, validated by a card-size guard in the unit tests).
+
+  The card layout: H1 title, device/OS/template metadata, headline (1-2 sentences naming the biggest user-impact finding ranked by hang>=250ms > launch>1s > perceptible hitches > short hang), per-area sub-sections (suppressed when empty to reduce noise), cross-correlations section with confidence badges, suggested next calls from inspectTrace.
+
+  Optional inputs: `focus: "hangs" | "hitches" | "allocations" | "launch" | "all"` to bias the summary toward one area; `verbose: true` to expand each section's top-N from 5 to 15+ and surface low-confidence correlations inline.
+
+  Failed analyzers (e.g. xctrace SIGSEGV on time-profile) surface their workaround notice inline; other sections unaffected. Empty schemas don't fail the call.
+
+- **`correlateHangsAndHitches()` pure cross-correlation helper.** Detects hangs whose time windows overlap with animation hitches. When a user sees a hang AND a hitch in the same window, they almost certainly perceived the impact (main-thread block delayed render commits). Confidence tiers: `high` when both events >= 250ms AND overlap span >= 100ms; `medium` when at least one event >= 250ms; `low` when both sub-250ms but touching. Results sorted by `atSec` ascending so the markdown card lists correlations in trace order. Allocation-based correlations (hangs+allocations, hitches+allocations) are deferred to v1.14+ because the existing `analyzeAllocations` doesn't expose per-timestamp allocation rows.
+
+- **`/summarize-trace` MCP prompt (6th prompt).** Counterpart to the `summarizeTrace` tool. Unlike the existing 5 prompts (which wrap multi-step playbooks), `/summarize-trace` wraps a single tool call. The brief tells the agent to (1) call `summarizeTrace`, (2) present `result.markdown` verbatim instead of paraphrasing, (3) offer drill-ins via `suggestedNextCalls`. Surfaces the "present the result; don't re-summarize" pattern that agents often get wrong with structured data.
+
+### Changed
+
+- `package.json` + `server.json`: 1.12.0 → 1.13.0.
+
+### Test count
+
+523 → 546 (+23): 14 buildHeadline/buildMarkdownCard tests in Phase 1, 9 correlation tests in Phase 2, +0 in Phase 3 (the prompts test was updated, not extended).
+
 ## [1.12.0] - 2026-05-14
 
 Four-phase patch completing the v1.10 retro §7.2 propagation (`countAlive`, `findRetainers`, `verifyFix` reference-tree integrations) and internalizing the v1.9 cross-schema correlation (`analyzeHangs` auto-classification). The agent chain `analyzeAbandonedMemory` → `findRetainers` → `countAlive` → `verifyFix` no longer falls off a cliff after the first call.
@@ -448,7 +478,8 @@ When called with no arguments it starts the MCP server over stdio.
 - **`captureMemgraph`** does not work on physical iOS devices — `leaks(1)` only attaches to processes on the local Mac (which includes iOS simulators). Memory Graph capture from a physical device still requires Xcode.
 - **`detectLeaksInXCUITest`** is flagged experimental: orchestration logic is implemented but not yet validated against a wide set of production XCUITest runs.
 
-[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.12.0...HEAD
+[Unreleased]: https://github.com/carloshpdoc/memorydetective/compare/v1.13.0...HEAD
+[1.13.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/carloshpdoc/memorydetective/compare/v1.9.0...v1.10.0

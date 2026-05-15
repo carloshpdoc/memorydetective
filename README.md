@@ -17,9 +17,9 @@
 - **MCP-native.** Plugs into Claude Code, Claude Desktop, Cursor, Cline, and any other MCP client. The agent drives the full investigate → classify → suggest-fix loop without you opening Instruments.
 - **Honest about its limits.** No mocked outputs, no over-promises. Hangs analysis works clean from `xctrace`; sample-level Time Profile is parsed when `xctrace` symbolicates the trace and returns a structured workaround notice when it can't (the underlying `xctrace` SIGSEGV on heavy unsymbolicated traces is an Apple-side limitation we surface explicitly). Memory Graph capture works on Mac apps and iOS simulator; physical iOS devices still need Xcode.
 
-> **What's new in v1.12** (2026-05-14): four-phase patch completing the v1.10 retro propagation across the remaining tools that had the reference-tree blind spot. (1) `countAlive({ includeReferenceTree: true })` now surfaces heap-wide instance counts (AVPlayerItem 685 = AVPlayerItem + AVPlayerItemInternal, via the substring match semantic) plus a noise-filtered `actionableCounts[]` view. (2) `verifyFix` chains internally into `analyzeAbandonedMemory` when no cycle patterns fire on either side; the notelet pair now returns `verdict: PASS` with `verdictSource: "abandoned-memory"` and a structured `freedClasses[]` list, instead of `verdict: undefined`. (3) `findRetainers({ includeReferenceTree: true })` parses `leaks --debug=stacks` and returns per-call-stack-fingerprint aggregated chains: the notelet AVPlayerItem case surfaces `MediaNoteItemVideoView.prepareVideo` as the allocation site + `_CFXNotificationRegistrarAddObject` (KVO global registry) as the retainer. (4) `analyzeHangs({ includeStackClassification: true })` now internally exports the time-profile schema alongside potential-hangs and auto-populates `mainThreadViolations[]` without the caller building a `topFramesByHangStartNs` map. 500 → 523 tests.
+> **What's new in v1.13** (2026-05-14): trace-depth synthesis differentiator. New `summarizeTrace` MCP tool (36th tool) takes a `.trace` and returns BOTH structured per-area data AND a pre-rendered compact markdown card (<10 KB) in a single call. Chains inspectTrace + the 5 analyzers in parallel, builds cross-area correlations (hangs overlapping with hitches → "main-thread block likely caused the dropped frames"), surfaces a 1-sentence headline ranked by user-impact, and suppresses empty sections to reduce noise. Counterpart `/summarize-trace` MCP prompt tells the agent to present the markdown verbatim instead of paraphrasing structured output. The "trace-to-summary-card-in-one-call" play vs trace MCPs that go deep on single-schema access. 523 → 546 tests.
 >
-> **Also recent**: v1.11 added `inspectTrace`, `diffMemgraphs` reference-tree, and CLI abandoned-memory mini-table. v1.10 closed the notelet retro feedback loop with parser fixes + classifier guards + `verify-fix-table` output. v1.9 shipped `analyzeAbandonedMemory` + `detectLeaksInXCTest` + `cleanupTraces` + `mainThreadViolations` + security env flags. Full notes in [CHANGELOG](./CHANGELOG.md).
+> **Also recent**: v1.12 completed the reference-tree propagation across countAlive / findRetainers / verifyFix and added auto cross-schema correlation in analyzeHangs. v1.11 added inspectTrace, diffMemgraphs reference-tree, and CLI abandoned-memory mini-table. v1.10 closed the notelet retro feedback loop. v1.9 shipped analyzeAbandonedMemory, detectLeaksInXCTest, cleanupTraces, mainThreadViolations. Full notes in [CHANGELOG](./CHANGELOG.md).
 
 > **Heads up for macOS 26.x users:** Apple shipped a `task_for_pid` kernel regression on macOS 26.x that blocks `leaks --outputGraph`, `heap`, AND `xctrace --template Allocations` against iOS simulator processes regardless of `MallocStackLogging`. Even Xcode's "View Memory Graph Hierarchy" hits it unless `Malloc Stack Logging` is enabled in the scheme's Diagnostics tab. memorydetective surfaces this as a proactive `platformAdvisory` on the first capture-class tool call, plus a `workaroundNotice` with `issue: "macos-26-task-for-pid-broken"` if `leaks` is invoked. **The most reliable workaround today is to target an iOS 18 simulator runtime** (install via Xcode > Settings > Platforms > +iOS 18.x). Empirically validated in the [notelet investigation](https://github.com/carloshpdoc/memorydetective/blob/main/CHANGELOG.md#unreleased) 2026-05-12 where three independent CLI memory-introspection paths all failed before iOS 18 was identified as the working escape hatch. Set `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1` to silence the notice once you have settled on a workaround.
 
@@ -295,7 +295,7 @@ Copilot's MCP integration moves fast. If this snippet is stale, see the [VS Code
 
 ## API
 
-**35 MCP tools + 34 Resources + 5 Prompts**, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.build]`, `[mg.scenario]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[ops]`, `[meta]`) so related tools are visible at a glance.
+**36 MCP tools + 34 Resources + 6 Prompts**, grouped by purpose. Tool descriptions are tagged with a category prefix (`[mg.memory]`, `[mg.trace]`, `[mg.build]`, `[mg.scenario]`, `[mg.code]`, `[mg.log]`, `[mg.render]`, `[mg.ci]`, `[mg.discover]`, `[ops]`, `[meta]`) so related tools are visible at a glance.
 
 Many tools include a `suggestedNextCalls` field in their response. A typed list of `{ tool, args, why }` entries pre-populated from the current result, so the orchestrating LLM can chain calls without re-reasoning. Start with `getInvestigationPlaybook(kind)` for the canonical sequence. Or just type `/investigate-leak` (one of the [Prompts](#prompts-5)) in any client that exposes MCP slash commands.
 
@@ -351,6 +351,12 @@ These three tools combine into a single deterministic verify-fix loop: launch th
 | `listTraceDevices` | Parse `xcrun xctrace list devices` (devices + simulators + UDIDs). |
 | `listTraceTemplates` | Parse `xcrun xctrace list templates` (standard + custom). |
 | `inspectTrace` | Orientation tool for `.trace` bundles. Returns schemas present + row counts + device/OS/template metadata + `suggestedNextCalls[]` mapping each populated known schema to its analyzer. Use this as the FIRST call on any `.trace`. New in v1.11. |
+
+### Synthesize (1)
+
+| Tool | What |
+|---|---|
+| `summarizeTrace` | Single call that chains `inspectTrace` + the 5 analyzers in parallel + cross-correlates findings (hangs overlapping with hitches, etc.) + pre-renders a compact (<10 KB) markdown summary card with a 1-sentence headline, per-area sub-sections, and suggestedNextCalls. The "trace-to-summary-card-in-one-call" play. Use this when you want one synthesis pass instead of chaining 5-6 analyzers manually. New in v1.13. |
 
 ### Render (1)
 
@@ -490,7 +496,7 @@ The `tool` subcommand dispatches to any registered MCP tool by name, reading inp
 git clone https://github.com/carloshpdoc/memorydetective
 cd memorydetective
 npm install
-npm test                  # 523 unit tests
+npm test                  # 546 unit tests
 npm run build             # build → dist/
 npm run dev               # tsx, stdio mode (dev mode)
 ./scripts/demo.sh         # full demo against a real .memgraph (set MEMGRAPH=path)
@@ -501,7 +507,7 @@ npm run dev               # tsx, stdio mode (dev mode)
 Contributions are welcome. Bug reports, feature requests, new cycle patterns, all of it.
 
 - **Bugs / feature requests**: [open an issue](https://github.com/carloshpdoc/memorydetective/issues).
-- **PRs**: fork → branch → `npm install` → make changes → `npm test` (523 tests must stay green) → open a PR with a concise description of what changed and why.
+- **PRs**: fork → branch → `npm install` → make changes → `npm test` (546 tests must stay green) → open a PR with a concise description of what changed and why.
 
 ### Adding a cycle pattern to `classifyCycle`
 
