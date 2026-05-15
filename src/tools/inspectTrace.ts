@@ -124,17 +124,23 @@ export function parseTraceToc(
   // Surfacing only schema metadata + row counts is faster and avoids
   // pulling row payloads into memory for traces that have hundreds of
   // thousands of rows.
+  //
+  // Apple's `xctrace export --toc` emits self-closing `<table schema="X"/>`
+  // elements (the TOC carries column definitions only, no rows). Older
+  // synthetic fixtures and some xctrace versions use the open-close form
+  // `<table schema="X">...<row/>...</table>`. We match BOTH and fall back
+  // to row-counting from the body when present.
 
-  // Match each <table schema="X"> block.
-  const tableRegex = /<table\b[^>]*\bschema="([^"]+)"[^>]*>([\s\S]*?)<\/table>/g;
+  // Open-close form first: `<table schema="X">body</table>`.
+  const openCloseRegex = /<table\b[^>]*\bschema="([^"]+)"[^>]*>([\s\S]*?)<\/table>/g;
+  const seenRanges: Array<[number, number]> = [];
   let match: RegExpExecArray | null;
-  while ((match = tableRegex.exec(xml)) !== null) {
+  while ((match = openCloseRegex.exec(xml)) !== null) {
     const name = match[1];
     const body = match[2];
-    // Row count = number of <row> tags inside this table.
+    seenRanges.push([match.index, match.index + match[0].length]);
     const rowMatches = body.match(/<row\b/g);
     const rowCount = rowMatches ? rowMatches.length : 0;
-    // Description: schema may carry an `engineering-type` description.
     const descMatch =
       /<engineering-description>([^<]+)<\/engineering-description>/.exec(body);
     const description = descMatch?.[1]?.trim();
@@ -144,16 +150,40 @@ export function parseTraceToc(
       ...(description ? { description } : {}),
     });
   }
+
+  // Self-closing form: `<table schema="X" .../>`. Skip ranges already
+  // matched by openCloseRegex so we don't double-count when a body contains
+  // nested self-closing tables (unlikely but defensive).
+  const selfCloseRegex = /<table\b[^>]*\bschema="([^"]+)"[^>]*\/>/g;
+  while ((match = selfCloseRegex.exec(xml)) !== null) {
+    const start = match.index;
+    if (seenRanges.some(([s, e]) => start >= s && start < e)) continue;
+    const name = match[1];
+    schemas.push({
+      name,
+      rowCount: 0, // TOC self-closing tables carry no rows; rowCount must be filled by the async row-counting step in inspectTrace().
+    });
+  }
+
   schemas.sort((a, b) => b.rowCount - a.rowCount);
 
   const rowCounts: Record<string, number> = {};
   for (const s of schemas) rowCounts[s.name] = s.rowCount;
 
   // Run-level metadata extracted from the TOC's <run> attributes / children.
-  const deviceMatch = /<device-model>([^<]+)<\/device-model>/.exec(xml);
-  const osMatch = /<os-version>([^<]+)<\/os-version>/.exec(xml);
+  // Apple's --toc output exposes device + OS as ATTRIBUTES on <device .../>
+  // and uses <start-date> instead of <recorded-when>. We try the Apple
+  // attribute form first, fall back to legacy text-element form for
+  // synthetic fixtures.
+  const deviceAttrMatch = /<device\b[^>]*\bmodel="([^"]+)"/.exec(xml);
+  const deviceMatch =
+    deviceAttrMatch ?? /<device-model>([^<]+)<\/device-model>/.exec(xml);
+  const osAttrMatch = /<device\b[^>]*\bos-version="([^"]+)"/.exec(xml);
+  const osMatch = osAttrMatch ?? /<os-version>([^<]+)<\/os-version>/.exec(xml);
   const templateMatch = /<template-name>([^<]+)<\/template-name>/.exec(xml);
-  const recordedMatch = /<recorded-when>([^<]+)<\/recorded-when>/.exec(xml);
+  const recordedAttrMatch = /<start-date>([^<]+)<\/start-date>/.exec(xml);
+  const recordedMatch =
+    recordedAttrMatch ?? /<recorded-when>([^<]+)<\/recorded-when>/.exec(xml);
 
   const suggestedNextCalls: NextCallSuggestion[] = [];
   for (const s of schemas) {
@@ -207,6 +237,42 @@ function buildDiagnosis(
   return parts.join(" ");
 }
 
+/**
+ * Count `<row>` elements for a single schema by running a targeted xpath
+ * query. Used by `inspectTrace` to fill in row counts that the bare
+ * `--toc` output omits (Apple's TOC emits self-closing `<table/>` elements
+ * with column metadata only, no rows).
+ *
+ * Bounded by a 60s xctrace timeout each. On any failure we treat as zero
+ * rows rather than throwing: an empty result is the same semantic outcome
+ * as a missing schema, and downstream `summarizeTrace` already handles
+ * `rowCount === 0` as "schema-absent".
+ */
+async function countSchemaRows(
+  tracePath: string,
+  schemaName: string,
+): Promise<number> {
+  try {
+    const result = await runCommand(
+      "xcrun",
+      [
+        "xctrace",
+        "export",
+        "--input",
+        tracePath,
+        "--xpath",
+        `/trace-toc/run/data/table[@schema="${schemaName}"]`,
+      ],
+      { timeoutMs: 60_000 },
+    );
+    if (result.code !== 0) return 0;
+    const rowMatches = result.stdout.match(/<row\b/g);
+    return rowMatches ? rowMatches.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function inspectTrace(
   input: InspectTraceInput,
 ): Promise<InspectTraceResult> {
@@ -221,32 +287,66 @@ export async function inspectTrace(
     // The bundle is a directory on macOS; stat reports the directory inode
     // size, which is fine for orientation. Failures are non-fatal.
   }
+  // Apple's `xctrace export --toc` is the canonical schema-discovery surface.
+  // The previously-used `--xpath '/trace-toc/run'` returns "no content to
+  // export" against real Apple-produced .trace bundles (validated 2026-05-15
+  // against wishlist-tti-device.trace). The --toc flag returns the full
+  // table-of-contents XML including all `<table schema="..."/>` elements.
   const result = await runCommand(
     "xcrun",
-    ["xctrace", "export", "--input", tracePath, "--xpath", "/trace-toc/run"],
+    ["xctrace", "export", "--input", tracePath, "--toc"],
     { timeoutMs: 60_000 },
   );
   if (result.code !== 0) {
-    // Fallback: when the targeted xpath fails (older xctrace versions, or
-    // a trace with no /run node), try the broader /trace-toc xpath and
-    // parse whatever schemas surface.
-    const fallback = await runCommand(
-      "xcrun",
-      ["xctrace", "export", "--input", tracePath, "--xpath", "/trace-toc"],
-      { timeoutMs: 60_000 },
+    throw new Error(
+      `xctrace export --toc failed (code ${result.code}): ${result.stderr || result.stdout || "<no output>"}`,
     );
-    if (fallback.code !== 0) {
-      throw new Error(
-        `xctrace export TOC failed (code ${result.code}): ${result.stderr || result.stdout || "<no output>"}`,
-      );
-    }
-    const parsed = parseTraceToc(fallback.stdout, tracePath);
-    return { ok: true, ...parsed, ...(fileSize != null ? { fileSize } : {}) };
   }
   const parsed = parseTraceToc(result.stdout, tracePath);
+
+  // The TOC carries schema NAMES + column metadata but no rows. Fill in
+  // row counts for the schemas an analyzer can consume (the ones in
+  // SCHEMA_TO_ANALYZER) so `summarizeTrace` can decide which analyzers to
+  // run. Other schemas (tick, kdebug, life-cycle-period, etc.) are left at
+  // rowCount=0; nothing downstream consumes them.
+  const knownSchemas = Object.keys(SCHEMA_TO_ANALYZER);
+  const schemasInTrace = new Set(parsed.schemas.map((s) => s.name));
+  const schemasToCount = knownSchemas.filter((name) => schemasInTrace.has(name));
+  const counts = await Promise.all(
+    schemasToCount.map(async (name) => [name, await countSchemaRows(tracePath, name)] as const),
+  );
+  const rowCounts: Record<string, number> = { ...parsed.rowCounts };
+  for (const [name, count] of counts) rowCounts[name] = count;
+  const updatedSchemas = parsed.schemas.map((s) =>
+    rowCounts[s.name] != null && rowCounts[s.name] !== s.rowCount
+      ? { ...s, rowCount: rowCounts[s.name] }
+      : s,
+  );
+  updatedSchemas.sort((a, b) => b.rowCount - a.rowCount);
+
+  // Recompute suggestedNextCalls now that row counts are accurate.
+  const suggestedNextCalls: NextCallSuggestion[] = [];
+  for (const s of updatedSchemas) {
+    if (s.rowCount === 0) continue;
+    const mapping = SCHEMA_TO_ANALYZER[s.name];
+    if (!mapping) continue;
+    suggestedNextCalls.push({
+      tool: mapping.tool,
+      args: { tracePath },
+      why: `${s.rowCount.toLocaleString()} rows in the ${s.name} schema. ${mapping.description}`,
+    });
+  }
+
+  // Recompute diagnosis with accurate row counts.
+  const diagnosis = buildDiagnosis(updatedSchemas, parsed.templateName);
+
   return {
     ok: true,
     ...parsed,
+    schemas: updatedSchemas,
+    rowCounts,
+    suggestedNextCalls,
+    diagnosis,
     ...(fileSize != null ? { fileSize } : {}),
   };
 }
