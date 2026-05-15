@@ -2,6 +2,7 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
+import { fetchDiscoveredSchemas } from "../parsers/schemaDiscovery.js";
 import {
   parseXctraceXml,
   asNumber,
@@ -225,6 +226,11 @@ export async function analyzeAllocations(
   if (!existsSync(tracePath)) {
     throw new Error(`Trace bundle not found: ${tracePath}`);
   }
+  const { allocations: schemaName } = await fetchDiscoveredSchemas(
+    runCommand,
+    tracePath,
+    ["allocations"] as const,
+  );
   const result = await runCommand(
     "xcrun",
     [
@@ -233,7 +239,7 @@ export async function analyzeAllocations(
       "--input",
       tracePath,
       "--xpath",
-      '/trace-toc/run/data/table[@schema="allocations"]',
+      `/trace-toc/run/data/table[@schema="${schemaName}"]`,
     ],
     { timeoutMs: 5 * 60_000 },
   );

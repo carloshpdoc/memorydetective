@@ -2,6 +2,7 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
+import { fetchDiscoveredSchemas } from "../parsers/schemaDiscovery.js";
 import {
   parseXctraceXml,
   asNumber,
@@ -171,6 +172,11 @@ export async function analyzeAppLaunch(
   if (!existsSync(tracePath)) {
     throw new Error(`Trace bundle not found: ${tracePath}`);
   }
+  const { "app-launch": schemaName } = await fetchDiscoveredSchemas(
+    runCommand,
+    tracePath,
+    ["app-launch"] as const,
+  );
   const result = await runCommand(
     "xcrun",
     [
@@ -179,7 +185,7 @@ export async function analyzeAppLaunch(
       "--input",
       tracePath,
       "--xpath",
-      '/trace-toc/run/data/table[@schema="app-launch"]',
+      `/trace-toc/run/data/table[@schema="${schemaName}"]`,
     ],
     { timeoutMs: 5 * 60_000 },
   );

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
+import { fetchDiscoveredSchemas } from "../parsers/schemaDiscovery.js";
 import {
   parseXctraceXml,
   asNumber,
@@ -515,6 +516,7 @@ export function correlateTimeProfileToHangs(
  */
 async function captureTimeProfileRows(
   tracePath: string,
+  schemaName: string,
 ): Promise<
   Array<{ startNs: number; weight?: number; topFrame?: string }>
 > {
@@ -526,14 +528,14 @@ async function captureTimeProfileRows(
       "--input",
       tracePath,
       "--xpath",
-      '/trace-toc/run/data/table[@schema="time-profile"]',
+      `/trace-toc/run/data/table[@schema="${schemaName}"]`,
     ],
     { timeoutMs: 5 * 60_000 },
   );
   if (result.code !== 0) return [];
   try {
     const tables = parseXctraceXml(result.stdout);
-    const tp = tables.find((t) => t.schema === "time-profile");
+    const tp = tables.find((t) => t.schema === schemaName);
     if (!tp) return [];
     const rows: Array<{ startNs: number; weight?: number; topFrame?: string }> =
       [];
@@ -568,6 +570,16 @@ export async function analyzeHangs(
     throw new Error(`Trace bundle not found: ${tracePath}`);
   }
   const wantStackClassification = input.includeStackClassification ?? false;
+  // v1.14 item B. Resolve the three schema names from the trace's TOC
+  // in one pass so a renamed schema does not break the analyzer. Falls
+  // back to canonical pre-v1.14 names when the TOC fetch or pattern
+  // match fails. Cost: one extra xctrace --toc invocation (~100-500ms
+  // on real traces). Cached per analyze call.
+  const discovered = await fetchDiscoveredSchemas(runCommand, tracePath, [
+    "hangs",
+    "hang-risks",
+    "time-profile",
+  ] as const);
   const [hangsResult, hangRisksResult, timeProfileRows] = await Promise.all([
     runCommand(
       "xcrun",
@@ -577,7 +589,7 @@ export async function analyzeHangs(
         "--input",
         tracePath,
         "--xpath",
-        '/trace-toc/run/data/table[@schema="potential-hangs"]',
+        `/trace-toc/run/data/table[@schema="${discovered.hangs}"]`,
       ],
       { timeoutMs: 5 * 60_000 },
     ),
@@ -593,12 +605,12 @@ export async function analyzeHangs(
         "--input",
         tracePath,
         "--xpath",
-        '/trace-toc/run/data/table[@schema="hang-risks"]',
+        `/trace-toc/run/data/table[@schema="${discovered["hang-risks"]}"]`,
       ],
       { timeoutMs: 5 * 60_000 },
     ),
     wantStackClassification
-      ? captureTimeProfileRows(tracePath)
+      ? captureTimeProfileRows(tracePath, discovered["time-profile"])
       : Promise.resolve(
           [] as Array<{
             startNs: number;
