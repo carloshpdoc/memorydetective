@@ -398,6 +398,35 @@ Set `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY=1` to silence the proactive stde
 
 The `getInvestigationPlaybook({ kind: "memgraph-leak" })` response carries a `troubleshooting` field with these recovery paths inline so an LLM agent can branch deterministically.
 
+### `recordTimeProfile` times out / produces a 52K bundle that fails to export
+
+`xcrun xctrace record --time-limit Ns` is broken on macOS 26.x for simulator targets. The recording wedges past the requested time limit, exits when SIGKILL fires, and produces a `.trace` bundle that contains only `Trace1.run/RunIssues.storedata` (no actual schema data). `xctrace export --toc` against the resulting bundle returns `Document Missing Template Error`. The bug is upstream (Apple) and survives Xcode 26.5 (build 17F42, xctrace 16.0) per the 2026-05-15 re-validation.
+
+The symptom in memorydetective:
+
+```jsonc
+{
+  "ok": false,
+  "recordingTimedOut": true,
+  "tracePath": "/tmp/x.trace",
+  "workaroundNotice": {
+    "issue": "macos-26-xctrace-record-broken",
+    "...": "..."
+  }
+}
+```
+
+It hits every `xctrace`-based tool the same way (this MCP, XcodeTraceMCP, raw `xcrun xctrace record` calls in a shell, third-party scripts wrapping the CLI). Not a memorydetective bug.
+
+Recovery options, ranked by automation cost:
+
+1. **Record on an older macOS host with Xcode 26.0 if you have one available.** Pre-regression `xctrace record` produces clean traces. The 2026-05-15 validation used `~/Desktop/wishlist-tti-device.trace`, a Time Profiler trace captured this way: 91s recording, 35 hangs detected, 44 418 time-profile samples, fully analyzable by memorydetective's trace-side tools.
+2. **Record via Instruments.app GUI.** Instruments.app on macOS 26.x still produces valid `.trace` bundles. Open Instruments, pick a template, choose the simulator + app, hit Record, drive the scenario, Stop, Save. Then point `inspectTrace` / `summarizeTrace` / `analyzeHangs` / `analyzeTimeProfile` / `compareTracesByPattern` at the saved bundle. All trace-side analyzers work normally on Instruments-recorded `.trace` bundles.
+3. **Record against a physical device (USB or wireless).** The regression appears to be simulator-specific. `xctrace record --device <UUID> --launch <app>` against a real iPhone / iPad does NOT exhibit the same wedge. Use this when you have a physical target available.
+4. **Wait for Apple.** The Feedback assistant is the right escalation path. The regression has shipped through Xcode 26.4 + 26.5; expect a fix in 26.6 or later.
+
+memorydetective's roadmap items `recordViaInstrumentsApp` (Group II-G) and the pre-flight probe (Group II-H) will narrow the manual-step surface as they land.
+
 ### `replayScenario` returns `workaroundNotice: { issue: "axe-not-found" }`
 
 The `axe` CLI is not on your `$PATH`. Install with:
