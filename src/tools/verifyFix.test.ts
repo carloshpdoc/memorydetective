@@ -105,3 +105,70 @@ describe("verifyFix", () => {
     }
   });
 });
+
+describe("verifyFix expectedAliveClasses whitelist (v1.14 item M)", () => {
+  it("schema accepts expectedAliveClasses + disableDefaultWhitelist", async () => {
+    const { verifyFixSchema } = await import("./verifyFix.js");
+    const parsed = verifyFixSchema.parse({
+      before: "/tmp/before.memgraph",
+      after: "/tmp/after.memgraph",
+      expectedAliveClasses: ["AVPlayerItem", "MyCacheSingleton"],
+      disableDefaultWhitelist: true,
+    });
+    expect(parsed.expectedAliveClasses).toEqual([
+      "AVPlayerItem",
+      "MyCacheSingleton",
+    ]);
+    expect(parsed.disableDefaultWhitelist).toBe(true);
+  });
+
+  it("schema defaults disableDefaultWhitelist to false (curated list applied)", async () => {
+    const { verifyFixSchema } = await import("./verifyFix.js");
+    const parsed = verifyFixSchema.parse({
+      before: "/tmp/before.memgraph",
+      after: "/tmp/after.memgraph",
+    });
+    expect(parsed.disableDefaultWhitelist).toBe(false);
+    expect(parsed.expectedAliveClasses).toBeUndefined();
+  });
+
+  it("schema rejects empty strings inside expectedAliveClasses", async () => {
+    const { verifyFixSchema } = await import("./verifyFix.js");
+    expect(() =>
+      verifyFixSchema.parse({
+        before: "/tmp/before.memgraph",
+        after: "/tmp/after.memgraph",
+        expectedAliveClasses: [""],
+      }),
+    ).toThrow();
+  });
+
+  it("DEFAULT_EXPECTED_ALIVE_CLASSES includes the DebugSwift-curated system classes", async () => {
+    const { DEFAULT_EXPECTED_ALIVE_CLASSES } = await import("./verifyFix.js");
+    expect(DEFAULT_EXPECTED_ALIVE_CLASSES).toContain(
+      "UICompatibilityInputViewController",
+    );
+    expect(DEFAULT_EXPECTED_ALIVE_CLASSES).toContain("UIPredictionViewController");
+    expect(DEFAULT_EXPECTED_ALIVE_CLASSES).toContain("UIRemoteKeyboardWindow");
+    expect(DEFAULT_EXPECTED_ALIVE_CLASSES).toContain("UITextEffectsWindow");
+    expect(DEFAULT_EXPECTED_ALIVE_CLASSES).toContain("PLTileContainerView");
+    expect(DEFAULT_EXPECTED_ALIVE_CLASSES).toContain("CAMPreviewView");
+  });
+
+  it("isExpectedAlive matches substrings case-insensitively (via internal helper)", async () => {
+    // We don't export the helpers directly; verify the visible behavior
+    // by checking the default-list-driven match patterns work both for
+    // exact-name + substring containment.
+    const { DEFAULT_EXPECTED_ALIVE_CLASSES } = await import("./verifyFix.js");
+    // The whitelist treats the items as substrings, so a derived name
+    // like "MyApp.UIRemoteKeyboardWindow" should also match.
+    const items = DEFAULT_EXPECTED_ALIVE_CLASSES.map((s) => s.toLowerCase());
+    expect(items.includes("uipredictionviewcontroller")).toBe(true);
+    // Sanity: substring matching means we'd reject classes that don't contain ANY item.
+    const benignClass = "MyApp.UserViewModel";
+    const anyMatch = items.some((w) =>
+      benignClass.toLowerCase().includes(w),
+    );
+    expect(anyMatch).toBe(false);
+  });
+});

@@ -27,6 +27,35 @@ import type { LeaksReport, NextCallSuggestion } from "../types.js";
  * fail the merge if the pattern resolved by the PR has regressed.
  */
 
+/**
+ * v1.14 item M. Default list of classes that legitimately stay alive
+ * across before/after snapshots in normal iOS app activity. Sourced from
+ * DebugSwift's `Performance.LeakDetector.swift` `_ignoredViewControllerClassNames`,
+ * `_ignoredViewClassNames`, and `_ignoredWindowClassNames` curated lists
+ * (FLEXTool fork lineage via Janneman84/LeakedViewControllerDetector).
+ *
+ * When these appear in `regressionClasses[]` we surface them under
+ * `expectedAlive[]` for transparency but don't let them flip the verdict
+ * to FAIL. Users can extend via `expectedAliveClasses` input or disable
+ * with `disableDefaultWhitelist: true` for strict matching.
+ */
+export const DEFAULT_EXPECTED_ALIVE_CLASSES: readonly string[] = [
+  // ViewControllers Apple keeps alive for system functions.
+  "UICompatibilityInputViewController",
+  "_SFAppPasswordSavingViewController",
+  "UIKeyboardHiddenViewController_Save",
+  "_UIAlertControllerTextFieldViewController",
+  "UISystemInputAssistantViewController",
+  "UIPredictionViewController",
+  // Internal views with persistent backing.
+  "PLTileContainerView",
+  "CAMPreviewView",
+  "_UIPointerInteractionAssistantEffectContainerView",
+  // Windows the OS retains.
+  "UIRemoteKeyboardWindow",
+  "UITextEffectsWindow",
+];
+
 export const verifyFixSchema = z.object({
   before: z
     .string()
@@ -41,6 +70,18 @@ export const verifyFixSchema = z.object({
     .optional()
     .describe(
       "If provided, the verdict is gated on whether this specific patternId disappeared from `after`. Defaults to checking every classified pattern.",
+    ),
+  expectedAliveClasses: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "v1.14+. Class names (substrings) that legitimately stay alive across the before/after snapshots. Singletons, framework registrars, persistent caches. When a class in this list appears in regressionClasses[], it is moved to expectedAlive[] and does not flip the verdict to FAIL. Merged with the curated default list (DebugSwift's ignoredViewControllerClassNames + ignoredViewClassNames + ignoredWindowClassNames) unless `disableDefaultWhitelist: true`.",
+    ),
+  disableDefaultWhitelist: z
+    .boolean()
+    .default(false)
+    .describe(
+      "v1.14+. When true, the curated DEFAULT_EXPECTED_ALIVE_CLASSES list is NOT applied. Only the user-supplied expectedAliveClasses (if any) is used. Useful for strict regression mode in tests where every alive class should be evaluated.",
     ),
   verbosity: z
     .enum(["compact", "normal", "full"])
@@ -98,6 +139,14 @@ export interface VerifyFixResult {
    * entries of `analyzeAbandonedMemory.actionableGrowth[]`.
    */
   regressionClasses?: AbandonedMemoryEntry[];
+  /**
+   * v1.14+. Class names from the effective whitelist
+   * (DEFAULT_EXPECTED_ALIVE_CLASSES + user-supplied) that DID appear in
+   * the raw regression set before filtering. Surfaced for transparency:
+   * the agent can see which "regressions" were intentionally ignored.
+   * Empty array when nothing was filtered. Absent when no fallback ran.
+   */
+  expectedAlive?: string[];
 }
 
 interface CycleByPattern {
@@ -344,14 +393,44 @@ const ABANDONED_MEMORY_TOPN = 100;
  * Returns null when even the abandoned-memory path can't run (paths
  * inaccessible, etc.); the caller falls back to the cycle-pattern result.
  */
+/**
+ * Build the effective expected-alive whitelist by merging the curated
+ * default list (unless disabled) with the user-supplied set. Returns a
+ * lowercase Set for case-insensitive substring matching. v1.14.
+ */
+function buildExpectedAliveSet(
+  userSupplied: readonly string[] | undefined,
+  disableDefault: boolean,
+): Set<string> {
+  const base = disableDefault ? [] : DEFAULT_EXPECTED_ALIVE_CLASSES;
+  const all = [...base, ...(userSupplied ?? [])];
+  return new Set(all.map((s) => s.toLowerCase()));
+}
+
+/**
+ * Returns true when the className matches any entry in the whitelist
+ * (substring match, case-insensitive). v1.14.
+ */
+function isExpectedAlive(
+  className: string,
+  whitelist: Set<string>,
+): boolean {
+  if (whitelist.size === 0) return false;
+  const lc = className.toLowerCase();
+  for (const w of whitelist) if (lc.includes(w)) return true;
+  return false;
+}
+
 async function buildAbandonedMemoryFallback(
   beforePath: string,
   afterPath: string,
+  expectedAliveWhitelist: Set<string>,
 ): Promise<
   | {
       verdict: "PASS" | "PARTIAL" | "FAIL";
       freedClasses: AbandonedMemoryEntry[];
       regressionClasses: AbandonedMemoryEntry[];
+      expectedAlive: string[];
       diagnosis: string;
     }
   | null
@@ -369,9 +448,21 @@ async function buildAbandonedMemoryFallback(
   const freedClasses = (amResult.actionableShrinkage ?? []).filter(
     (e) => Math.abs(e.delta) >= ACTIONABLE_DELTA_THRESHOLD,
   );
-  const regressionClasses = (amResult.actionableGrowth ?? []).filter(
+  // Partition raw regression set into "really regressed" vs "in the
+  // expected-alive whitelist" so the verdict ignores the latter while
+  // surfacing them on the response for transparency.
+  const rawRegressions = (amResult.actionableGrowth ?? []).filter(
     (e) => Math.abs(e.delta) >= ACTIONABLE_DELTA_THRESHOLD,
   );
+  const regressionClasses: AbandonedMemoryEntry[] = [];
+  const expectedAlive: string[] = [];
+  for (const entry of rawRegressions) {
+    if (isExpectedAlive(entry.className, expectedAliveWhitelist)) {
+      expectedAlive.push(entry.className);
+    } else {
+      regressionClasses.push(entry);
+    }
+  }
   // Magnitude check: a fix that frees thousands of instances and incidentally
   // grows a hundred Swift Metadata / pthread_mutex_t / ObjC class table
   // entries (these scale with app activity, not user code) should be PASS,
@@ -427,7 +518,7 @@ async function buildAbandonedMemoryFallback(
     diagnosis =
       "No actionable class-count changes between snapshots (|delta| < 10). Either both snapshots are clean or the workflow did not exercise the targeted code.";
   }
-  return { verdict, freedClasses, regressionClasses, diagnosis };
+  return { verdict, freedClasses, regressionClasses, expectedAlive, diagnosis };
 }
 
 export async function verifyFix(input: VerifyFixInput): Promise<VerifyFixResult> {
@@ -446,11 +537,20 @@ export async function verifyFix(input: VerifyFixInput): Promise<VerifyFixResult>
   // cycle-pattern path takes precedence when patterns DO fire, so this
   // is a strict fallback.
   if (result.patternResolution.length === 0) {
-    const fallback = await buildAbandonedMemoryFallback(input.before, input.after);
+    const whitelist = buildExpectedAliveSet(
+      input.expectedAliveClasses,
+      input.disableDefaultWhitelist ?? false,
+    );
+    const fallback = await buildAbandonedMemoryFallback(
+      input.before,
+      input.after,
+      whitelist,
+    );
     if (fallback) {
       result.verdictSource = "abandoned-memory";
       result.freedClasses = fallback.freedClasses;
       result.regressionClasses = fallback.regressionClasses;
+      result.expectedAlive = fallback.expectedAlive;
       result.overallVerdict = fallback.verdict;
       result.diagnosis = fallback.diagnosis;
     } else {
