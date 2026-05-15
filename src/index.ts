@@ -85,6 +85,10 @@ import {
   analyzeMemoryFootprintSchema,
 } from "./tools/analyzeMemoryFootprint.js";
 import {
+  analyzeEnergyImpact,
+  analyzeEnergyImpactSchema,
+} from "./tools/analyzeEnergyImpact.js";
+import {
   renderCycleGraph,
   renderCycleGraphSchema,
 } from "./tools/renderCycleGraph.js";
@@ -525,6 +529,20 @@ server.registerTool(
   async (input) => {
     const result = await analyzeMemoryFootprint(input);
     return formatMcpResponse(result, "analyzeMemoryFootprint", input.outputFormat);
+  },
+);
+
+server.registerTool(
+  "analyzeEnergyImpact",
+  {
+    title: "Analyze energy use / battery drain from an Energy Log trace",
+    description:
+      "[mg.trace] Parse the `energy-impact` schema from a `.trace` recorded with an Energy Log template. Returns per-sample bucket classification (idle / passive / active / high), aggregate wakeup count, active-state ratio, top-N samples by energy cost. The 'why is my app draining battery?' investigation. Distinct from analyzeTimeProfile (CPU sampling); reads the OS power-management subsystem directly. v1.15+.",
+    inputSchema: analyzeEnergyImpactSchema.shape,
+  },
+  async (input) => {
+    const result = await analyzeEnergyImpact(input);
+    return formatMcpResponse(result, "analyzeEnergyImpact", input.outputFormat);
   },
 );
 

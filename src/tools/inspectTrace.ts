@@ -120,6 +120,11 @@ const SCHEMA_TO_ANALYZER: Record<
     description:
       "Peak resident / dirty / virtual bytes plus per-sample timeline. The OOM-kill discriminator on iOS.",
   },
+  "energy-impact": {
+    tool: "analyzeEnergyImpact",
+    description:
+      "Per-sample bucket (idle / passive / active / high), aggregate wakeups, active ratio, top samples by energy cost.",
+  },
 };
 
 /** Pure: parse the trace-toc XML payload into an inspection result. */
