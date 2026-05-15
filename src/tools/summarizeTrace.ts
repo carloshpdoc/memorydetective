@@ -86,6 +86,24 @@ export interface SummarizeAreaSummary<TResult> {
   result?: TResult;
 }
 
+/**
+ * v1.13 Phase 2: cross-area correlation. Each entry is a finding
+ * tying TWO areas together via timestamp overlap. The narrative
+ * field is the human-scannable string that goes into the markdown
+ * card; the structured fields (`kind`, `confidence`, evidence ids)
+ * are what callers can branch on programmatically.
+ */
+export interface Correlation {
+  /** Which two areas this correlation ties together. Currently only `hangs+hitches` is supported; `hangs+allocations` and `hitches+allocations` are deferred to v1.14+ because the analyzer doesn't currently expose per-timestamp allocation rows. */
+  kind: "hangs+hitches";
+  /** `high` when the overlap is substantial (both events > 100ms and the windows overlap significantly); `medium` when one event is short; `low` when timestamps are only adjacent. */
+  confidence: "high" | "medium" | "low";
+  /** Pre-formatted human-scannable narrative. Goes into the markdown card. */
+  narrative: string;
+  /** Start time in seconds (for the hang event). Used to rank correlations by user-relevance (earliest first). */
+  atSec: number;
+}
+
 export interface SummarizeTraceResult {
   ok: boolean;
   tracePath: string;
@@ -99,6 +117,8 @@ export interface SummarizeTraceResult {
     allocations: SummarizeAreaSummary<AnalyzeAllocationsResult>;
     appLaunch: SummarizeAreaSummary<AnalyzeAppLaunchResult>;
   };
+  /** Cross-area correlations (v1.13 Phase 2). Empty when areas don't have enough data to correlate. */
+  correlations: Correlation[];
   /** Headline string: 1-2 sentences naming the biggest user-impact finding across all areas. */
   headline: string;
   /** Pre-rendered markdown summary card. Target < 10 KB at default `verbose: false`. */
@@ -144,6 +164,76 @@ async function buildAreaSummary<TResult>(
       diagnosis: `Analyzer failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+/**
+ * Pure: detect hangs whose window overlaps with animation hitches.
+ * When a user sees a hang AND a hitch in the same time window,
+ * they almost certainly perceived the impact (the main-thread block
+ * delayed render commits, dropping frames).
+ *
+ * The overlap check is symmetric: a hitch can fall within a hang's
+ * window OR a hang can fall within a hitch's window. Both directions
+ * are treated equally.
+ *
+ * Confidence:
+ *
+ * - `high`: both events >= 250ms AND the overlap span >= 100ms.
+ * - `medium`: at least one event >= 250ms.
+ * - `low`: neither event >= 250ms but the windows touch.
+ *
+ * Results are sorted by `atSec` ascending so the markdown card lists
+ * correlations in trace order.
+ */
+export function correlateHangsAndHitches(
+  hangs: Array<{ startNs: number; durationNs: number; durationMs: number }>,
+  hitches: Array<{ startNs: number; durationNs: number; durationMs: number; hitchType?: string }>,
+): Correlation[] {
+  const results: Correlation[] = [];
+  for (const hang of hangs) {
+    const hangEnd = hang.startNs + hang.durationNs;
+    for (const hitch of hitches) {
+      const hitchEnd = hitch.startNs + hitch.durationNs;
+      // Half-open interval overlap: max(starts) < min(ends).
+      const overlapStart = Math.max(hang.startNs, hitch.startNs);
+      const overlapEnd = Math.min(hangEnd, hitchEnd);
+      if (overlapEnd <= overlapStart) continue;
+      const overlapMs = (overlapEnd - overlapStart) / 1e6;
+      const atSec = Math.min(hang.startNs, hitch.startNs) / 1e9;
+      let confidence: Correlation["confidence"];
+      if (
+        hang.durationMs >= 250 &&
+        hitch.durationMs >= 250 &&
+        overlapMs >= 100
+      ) {
+        confidence = "high";
+      } else if (hang.durationMs >= 250 || hitch.durationMs >= 250) {
+        confidence = "medium";
+      } else {
+        confidence = "low";
+      }
+      const hitchKind = hitch.hitchType ? `${hitch.hitchType} ` : "";
+      const narrative = `Hang at t=${(hang.startNs / 1e9).toFixed(2)}s (${hang.durationMs.toFixed(0)}ms) overlaps with ${hitchKind}hitch at t=${(hitch.startNs / 1e9).toFixed(2)}s (${hitch.durationMs.toFixed(0)}ms). Main-thread block likely caused the dropped frames.`;
+      results.push({ kind: "hangs+hitches", confidence, narrative, atSec });
+    }
+  }
+  results.sort((a, b) => a.atSec - b.atSec);
+  return results;
+}
+
+/**
+ * Pure: build all cross-area correlations from per-area summaries.
+ * Currently only `hangs+hitches` produces entries; allocation-based
+ * correlations need per-timestamp allocation data the existing
+ * analyzeAllocations doesn't expose (v1.14+ candidate).
+ */
+export function buildCorrelations(
+  areas: SummarizeTraceResult["areas"],
+): Correlation[] {
+  const hangs = areas.hangs.result?.top ?? [];
+  const hitches = areas.hitches.result?.top ?? [];
+  if (hangs.length === 0 || hitches.length === 0) return [];
+  return correlateHangsAndHitches(hangs, hitches);
 }
 
 /**
@@ -351,6 +441,37 @@ export function buildMarkdownCard(
     sections.push("");
   }
 
+  // Cross-correlations (v1.13 Phase 2). High and medium go straight
+  // into the card; low-confidence entries collapsed into a single
+  // "plus N more" line to keep the card compact.
+  const correlations = result.correlations ?? [];
+  if (correlations.length > 0) {
+    const highMedium = correlations.filter(
+      (c) => c.confidence === "high" || c.confidence === "medium",
+    );
+    const low = correlations.filter((c) => c.confidence === "low");
+    if (highMedium.length > 0 || verbose) {
+      sections.push("## Cross-correlations");
+      sections.push("");
+      const visible = verbose ? correlations : highMedium;
+      for (const c of visible) {
+        const confidenceBadge =
+          c.confidence === "high"
+            ? "**HIGH**"
+            : c.confidence === "medium"
+              ? "MEDIUM"
+              : "low";
+        sections.push(`- (${confidenceBadge}) ${c.narrative}`);
+      }
+      if (!verbose && low.length > 0) {
+        sections.push(
+          `- _${low.length} low-confidence overlap${low.length === 1 ? "" : "s"} omitted; pass \`verbose: true\` to see them._`,
+        );
+      }
+      sections.push("");
+    }
+  }
+
   // Suggested next calls from inspectTrace (carries them already).
   if (inspection.suggestedNextCalls.length > 0) {
     sections.push("## Suggested next calls");
@@ -438,6 +559,7 @@ export async function summarizeTrace(
     allocations,
     appLaunch,
   };
+  const correlations = buildCorrelations(areas);
   const headline = buildHeadline(areas);
 
   const base: Omit<SummarizeTraceResult, "markdown"> = {
@@ -445,6 +567,7 @@ export async function summarizeTrace(
     tracePath,
     inspection,
     areas,
+    correlations,
     headline,
   };
   const markdown = buildMarkdownCard(base, verbose);

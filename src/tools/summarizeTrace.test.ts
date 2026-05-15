@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildHeadline,
   buildMarkdownCard,
+  correlateHangsAndHitches,
+  buildCorrelations,
   SUMMARIZE_AREA_KEYS,
   type SummarizeTraceResult,
 } from "./summarizeTrace.js";
@@ -197,6 +199,106 @@ describe("buildHeadline", () => {
   });
 });
 
+describe("correlateHangsAndHitches", () => {
+  it("returns empty when either side is empty", () => {
+    expect(correlateHangsAndHitches([], [])).toEqual([]);
+    expect(
+      correlateHangsAndHitches(
+        [{ startNs: 1e9, durationNs: 1e9, durationMs: 1000 }],
+        [],
+      ),
+    ).toEqual([]);
+  });
+
+  it("detects overlap when hitch falls inside hang window", () => {
+    const r = correlateHangsAndHitches(
+      [{ startNs: 1_000_000_000, durationNs: 1_000_000_000, durationMs: 1000 }],
+      [
+        {
+          startNs: 1_200_000_000,
+          durationNs: 100_000_000,
+          durationMs: 100,
+          hitchType: "RenderServerCommit",
+        },
+      ],
+    );
+    expect(r).toHaveLength(1);
+    expect(r[0].kind).toBe("hangs+hitches");
+    expect(r[0].narrative).toContain("Hang at t=1.00s");
+    expect(r[0].narrative).toContain("RenderServerCommit");
+  });
+
+  it("excludes non-overlapping events", () => {
+    const r = correlateHangsAndHitches(
+      [{ startNs: 1_000_000_000, durationNs: 500_000_000, durationMs: 500 }],
+      [
+        {
+          startNs: 2_000_000_000,
+          durationNs: 100_000_000,
+          durationMs: 100,
+        },
+      ],
+    );
+    expect(r).toEqual([]);
+  });
+
+  it("rates a >=250ms + >=250ms overlap >=100ms as HIGH confidence", () => {
+    const r = correlateHangsAndHitches(
+      [{ startNs: 1_000_000_000, durationNs: 500_000_000, durationMs: 500 }],
+      [
+        {
+          startNs: 1_100_000_000,
+          durationNs: 300_000_000,
+          durationMs: 300,
+        },
+      ],
+    );
+    expect(r[0].confidence).toBe("high");
+  });
+
+  it("rates only-one-side->=250ms as MEDIUM confidence", () => {
+    const r = correlateHangsAndHitches(
+      [{ startNs: 1_000_000_000, durationNs: 500_000_000, durationMs: 500 }],
+      [
+        {
+          startNs: 1_100_000_000,
+          durationNs: 100_000_000,
+          durationMs: 100,
+        },
+      ],
+    );
+    expect(r[0].confidence).toBe("medium");
+  });
+
+  it("rates both-sub-250ms-but-overlapping as LOW confidence", () => {
+    const r = correlateHangsAndHitches(
+      [{ startNs: 1_000_000_000, durationNs: 100_000_000, durationMs: 100 }],
+      [
+        {
+          startNs: 1_050_000_000,
+          durationNs: 50_000_000,
+          durationMs: 50,
+        },
+      ],
+    );
+    expect(r[0].confidence).toBe("low");
+  });
+
+  it("sorts results by atSec ascending", () => {
+    const r = correlateHangsAndHitches(
+      [
+        { startNs: 5_000_000_000, durationNs: 500_000_000, durationMs: 500 },
+        { startNs: 1_000_000_000, durationNs: 500_000_000, durationMs: 500 },
+      ],
+      [
+        { startNs: 5_100_000_000, durationNs: 300_000_000, durationMs: 300 },
+        { startNs: 1_100_000_000, durationNs: 300_000_000, durationMs: 300 },
+      ],
+    );
+    expect(r.map((c) => c.atSec)).toEqual([1, 5]);
+  });
+});
+
 describe("buildMarkdownCard", () => {
   it("renders the empty-trace card without any analyzer sections", () => {
     const base = {
@@ -375,6 +477,74 @@ describe("buildMarkdownCard", () => {
     expect(md).toMatch(/## Time profile \(1[.,]234 samples/);
     expect(md).toContain("dSYM");
     expect(md).toContain("`MyApp.foo`");
+  });
+
+  it("renders correlations section with confidence badges and verbose toggle", () => {
+    const baseAreas = emptyAreas();
+    baseAreas.hangs = {
+      status: "ok",
+      diagnosis: "",
+      result: makeHangsResult([
+        makeHang(500, 1_000_000_000, { kind: "db-lock", topFrame: "sqlite3_step" }),
+      ]),
+    };
+    baseAreas.hitches = {
+      status: "ok",
+      diagnosis: "",
+      result: {
+        ok: true,
+        tracePath: "/tmp/run.trace",
+        totals: {
+          rows: 1,
+          totalDurationMs: 200,
+          longestMs: 200,
+          averageMs: 200,
+          perceptible: 1,
+        },
+        byType: {},
+        top: [
+          {
+            startNs: 1_100_000_000,
+            startFmt: "1.10s",
+            durationNs: 200 * 1e6,
+            durationMs: 200,
+            durationFmt: "200ms",
+            hitchType: "RenderServerCommit",
+          },
+        ],
+        diagnosis: "synthetic",
+        status: "available",
+      },
+    };
+    const base = {
+      ok: true as const,
+      tracePath: "/tmp/run.trace",
+      inspection: inspectionWith({ "potential-hangs": 1, "animation-hitches": 1 }),
+      areas: baseAreas,
+      correlations: buildCorrelations(baseAreas),
+      headline: buildHeadline(baseAreas),
+    };
+    const md = buildMarkdownCard(base, false);
+    expect(md).toContain("## Cross-correlations");
+    // Hang 500ms (>=250) + hitch 200ms (<250) -> MEDIUM (only one event >=250).
+    expect(md).toContain("MEDIUM");
+    expect(md).toContain("Hang at t=1.00s");
+    expect(md).toContain("hitch at t=1.10s");
+  });
+
+  it("suppresses Cross-correlations section when no correlations exist", () => {
+    const md = buildMarkdownCard(
+      {
+        ok: true,
+        tracePath: "/tmp/run.trace",
+        inspection: inspectionWith({}),
+        areas: emptyAreas(),
+        correlations: [],
+        headline: "h",
+      },
+      false,
+    );
+    expect(md).not.toContain("## Cross-correlations");
   });
 
   it("stays under 10 KB at default settings on a populated trace", () => {
