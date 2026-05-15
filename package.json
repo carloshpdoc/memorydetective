@@ -1,8 +1,8 @@
 {
   "name": "memorydetective",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "mcpName": "io.github.carloshpdoc/memorydetective",
-  "description": "MCP server for iOS leak hunting and performance investigation. 37 tools across .memgraph and .trace files, 36-pattern retain-cycle classifier with Swift fixTemplate snippets, abandoned-memory diff for KVO/NotificationCenter/cache shapes that escape leaks(1), per-test CI gate (detectLeaksInXCTest + detectLeaksInXCUITest with self-contained HTML reports), main-thread violation classifier on analyzeHangs, single-call build+boot+launch for the macOS 26.x leaks --outputGraph regression, replayScenario + captureScenarioState verify-fix loop, compareTracesByPattern CI gate on hangs/hitches/launch regressions, SourceKit-LSP source bridging. macOS only (depends on leaks(1) and xctrace).",
+  "description": "MCP server for iOS leak hunting and performance investigation. 40 tools across .memgraph and .trace files. v1.15 adds analyzeMemoryFootprint (VM resident/dirty/jetsam), analyzeEnergyImpact (battery drain), analyzeLeakTimeline (leaks as time series), summarizeTrace network chain integration, replayScenario screenshot capture. 36-pattern retain-cycle classifier with Swift fixTemplate snippets, abandoned-memory diff for KVO/NotificationCenter/cache shapes that escape leaks(1), per-test CI gate (detectLeaksInXCTest + detectLeaksInXCUITest with self-contained HTML reports), main-thread violation classifier on analyzeHangs, single-call build+boot+launch for the macOS 26.x leaks --outputGraph regression, replayScenario + captureScenarioState verify-fix loop, compareTracesByPattern CI gate on hangs/hitches/launch regressions, SourceKit-LSP source bridging. macOS only (depends on leaks(1) and xctrace).",
   "type": "module",
   "bin": {
     "memorydetective": "dist/index.js"
