@@ -93,6 +93,10 @@ import {
   analyzeLeakTimelineSchema,
 } from "./tools/analyzeLeakTimeline.js";
 import {
+  recordViaInstrumentsApp,
+  recordViaInstrumentsAppSchema,
+} from "./tools/recordViaInstrumentsApp.js";
+import {
   renderCycleGraph,
   renderCycleGraphSchema,
 } from "./tools/renderCycleGraph.js";
@@ -561,6 +565,20 @@ server.registerTool(
   async (input) => {
     const result = await analyzeLeakTimeline(input);
     return formatMcpResponse(result, "analyzeLeakTimeline", input.outputFormat);
+  },
+);
+
+server.registerTool(
+  "recordViaInstrumentsApp",
+  {
+    title: "Record a .trace via Instruments.app GUI (macOS 26.x workaround)",
+    description:
+      "[mg.build] Open Instruments.app, prompt the user to record + save a .trace, then poll a watchDir for the new bundle and chain into inspectTrace. The macOS 26.x escape hatch: `xcrun xctrace record` wedges on this OS but Instruments.app GUI still produces valid traces. Returns instructions[] for the user-in-loop step, tracePath when found, plus a chained inspectTrace summary. Times out after `timeoutSec` (default 600s). v1.16+.",
+    inputSchema: recordViaInstrumentsAppSchema.shape,
+  },
+  async (input) => {
+    const result = await recordViaInstrumentsApp(input);
+    return formatMcpResponse(result, "recordViaInstrumentsApp", undefined);
   },
 );
 

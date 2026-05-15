@@ -420,12 +420,13 @@ It hits every `xctrace`-based tool the same way (this MCP, XcodeTraceMCP, raw `x
 
 Recovery options, ranked by automation cost:
 
-1. **Record on an older macOS host with Xcode 26.0 if you have one available.** Pre-regression `xctrace record` produces clean traces. The 2026-05-15 validation used `~/Desktop/wishlist-tti-device.trace`, a Time Profiler trace captured this way: 91s recording, 35 hangs detected, 44 418 time-profile samples, fully analyzable by memorydetective's trace-side tools.
-2. **Record via Instruments.app GUI.** Instruments.app on macOS 26.x still produces valid `.trace` bundles. Open Instruments, pick a template, choose the simulator + app, hit Record, drive the scenario, Stop, Save. Then point `inspectTrace` / `summarizeTrace` / `analyzeHangs` / `analyzeTimeProfile` / `compareTracesByPattern` at the saved bundle. All trace-side analyzers work normally on Instruments-recorded `.trace` bundles.
-3. **Record against a physical device (USB or wireless).** The regression appears to be simulator-specific. `xctrace record --device <UUID> --launch <app>` against a real iPhone / iPad does NOT exhibit the same wedge. Use this when you have a physical target available.
-4. **Wait for Apple.** The Feedback assistant is the right escalation path. The regression has shipped through Xcode 26.4 + 26.5; expect a fix in 26.6 or later.
+1. **`recordViaInstrumentsApp` MCP tool (v1.16+).** Opens Instruments.app for you, surfaces step-by-step instructions in the response, then watches a directory for the saved `.trace`. Once it appears, the tool returns the path plus a chained `inspectTrace` summary. The user-in-loop step is the recording itself (pick template, hit Record, hit Stop, hit Save). Why is it user-in-loop? Instruments.app's AppleScript surface is minimal: queries on the `document` class only, no verbs for start/stop/select-template (see `Xcode.app/Contents/Applications/Instruments.app/Contents/Resources/Instruments.sdef`). The watcher polls every 5 seconds and considers a bundle "saved" after its mtime is stable for 10 seconds.
+2. **Record on an older macOS host with Xcode 26.0 if you have one available.** Pre-regression `xctrace record` produces clean traces. The 2026-05-15 validation used `~/Desktop/wishlist-tti-device.trace`, a Time Profiler trace captured this way: 91s recording, 35 hangs detected, 44 418 time-profile samples, fully analyzable by memorydetective's trace-side tools.
+3. **Record manually via Instruments.app GUI without the wrapper.** Instruments.app on macOS 26.x still produces valid `.trace` bundles. Open Instruments, pick a template, choose the simulator + app, hit Record, drive the scenario, Stop, Save. Then point `inspectTrace` / `summarizeTrace` / `analyzeHangs` / `analyzeTimeProfile` / `compareTracesByPattern` at the saved bundle. All trace-side analyzers work normally on Instruments-recorded `.trace` bundles.
+4. **Record against a physical device (USB or wireless).** The regression appears to be simulator-specific. `xctrace record --device <UUID> --launch <app>` against a real iPhone / iPad does NOT exhibit the same wedge. Use this when you have a physical target available.
+5. **Wait for Apple.** The Feedback assistant is the right escalation path. The regression has shipped through Xcode 26.4 + 26.5; expect a fix in 26.6 or later.
 
-memorydetective's roadmap items `recordViaInstrumentsApp` (Group II-G) and the pre-flight probe (Group II-H) will narrow the manual-step surface as they land.
+memorydetective's `recordViaInstrumentsApp` (v1.16) + pre-flight probe (v1.14) cover the automated paths around the regression until Apple ships a fix.
 
 ### `replayScenario` returns `workaroundNotice: { issue: "axe-not-found" }`
 
