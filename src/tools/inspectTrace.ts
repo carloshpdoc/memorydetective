@@ -110,6 +110,11 @@ const SCHEMA_TO_ANALYZER: Record<
     description:
       "Returns cold/warm launch type plus per-phase breakdown (process-creation, dyld-init, ObjC-init, AppDelegate, first-frame).",
   },
+  "network-connections": {
+    tool: "analyzeNetworkActivity",
+    description:
+      "Per-request URL / host / method / status / response time / bytes. Top-N by duration and by bytes plus per-host aggregates.",
+  },
 };
 
 /** Pure: parse the trace-toc XML payload into an inspection result. */

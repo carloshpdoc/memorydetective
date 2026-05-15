@@ -77,6 +77,10 @@ import {
   analyzeAppLaunchSchema,
 } from "./tools/analyzeAppLaunch.js";
 import {
+  analyzeNetworkActivity,
+  analyzeNetworkActivitySchema,
+} from "./tools/analyzeNetworkActivity.js";
+import {
   renderCycleGraph,
   renderCycleGraphSchema,
 } from "./tools/renderCycleGraph.js";
@@ -489,6 +493,20 @@ server.registerTool(
   async (input) => {
     const result = await analyzeAppLaunch(input);
     return formatMcpResponse(result, "analyzeAppLaunch", input.outputFormat);
+  },
+);
+
+server.registerTool(
+  "analyzeNetworkActivity",
+  {
+    title: "Analyze HTTP / connection activity from a Network trace",
+    description:
+      "[mg.trace] Parse the `network-connections` schema from a `.trace` recorded with a Network template. Returns per-request URL/host, method, status code, response time, bytes in/out. Top-N rankings by duration (which calls blocked the user) and by bytes (which calls bloat the budget) plus per-host aggregates surfacing chatty SDKs. v1.14+.",
+    inputSchema: analyzeNetworkActivitySchema.shape,
+  },
+  async (input) => {
+    const result = await analyzeNetworkActivity(input);
+    return formatMcpResponse(result, "analyzeNetworkActivity", input.outputFormat);
   },
 );
 
