@@ -259,6 +259,86 @@ describe("analyzeTimeProfileFromXml", () => {
       samples: 2,
     });
   });
+
+  it("extracts symbol from <backtrace><frame name=...> (real Apple time-profile shape)", () => {
+    // This is the shape that ships from xctrace export on a real .trace.
+    // The symbol lives on the FIRST <frame> element's @_name attribute,
+    // not on a dedicated <symbol> column. Pre-2026-05-15 the parser only
+    // read @_fmt, so topSymbols ended up being the weight column repeated.
+    const real = `<?xml version="1.0"?>
+<trace-query-result>
+<node xpath='//trace-toc[1]/run[1]/data[1]/table[13]'>
+<schema name="time-profile">
+<col><mnemonic>time</mnemonic><name>Sample Time</name><engineering-type>sample-time</engineering-type></col>
+<col><mnemonic>weight</mnemonic><name>Weight</name><engineering-type>weight</engineering-type></col>
+<col><mnemonic>stack</mnemonic><name>Backtrace</name><engineering-type>backtrace</engineering-type></col>
+</schema>
+<row>
+<sample-time id="1" fmt="00:00.100.000">100000000</sample-time>
+<weight id="2" fmt="1.00 ms">1000000</weight>
+<backtrace id="3">
+<frame id="4" name="_CFRunLoopRunSpecificWithOptions" addr="0x19e52fa6c">
+<binary id="5" name="CoreFoundation" UUID="2F32D384" arch="arm64e" load-addr="0x19e513000" path="/dev/null"/>
+</frame>
+</backtrace>
+</row>
+<row>
+<sample-time id="6" fmt="00:00.200.000">200000000</sample-time>
+<weight id="7" fmt="1.00 ms">1000000</weight>
+<backtrace id="8">
+<frame id="9" name="_CFRunLoopRunSpecificWithOptions" addr="0x19e52fa6c">
+<binary ref="5"/>
+</frame>
+</backtrace>
+</row>
+<row>
+<sample-time id="10" fmt="00:00.300.000">300000000</sample-time>
+<weight id="11" fmt="1.00 ms">1000000</weight>
+<backtrace id="12">
+<frame id="13" name="0x24c0aaa29" addr="0x24c0aaa29">
+<binary id="14" name="libsystem_kernel.dylib" UUID="8D830129" arch="arm64e" load-addr="0x24c0aa000" path="/dev/null"/>
+</frame>
+</backtrace>
+</row>
+</node></trace-query-result>`;
+    const result = analyzeTimeProfileFromXml(real, "/fake/real.trace");
+    expect(result.totalSamples).toBe(3);
+    // Two samples with the symbolicated frame should aggregate together.
+    expect(result.topSymbols[0]).toEqual({
+      symbol: "_CFRunLoopRunSpecificWithOptions",
+      samples: 2,
+    });
+    // The hex-address frame should cluster by its binary name (with the
+    // hex preserved in parens for traceability).
+    expect(result.topSymbols[1]).toEqual({
+      symbol: "libsystem_kernel.dylib (0x24c0aaa29)",
+      samples: 1,
+    });
+  });
+
+  it("uses bare binary name when the leaf frame has no @_name at all", () => {
+    const minimal = `<?xml version="1.0"?>
+<trace-query-result>
+<node><schema name="time-profile">
+<col><mnemonic>weight</mnemonic><name>Weight</name><engineering-type>weight</engineering-type></col>
+<col><mnemonic>stack</mnemonic><name>Backtrace</name><engineering-type>backtrace</engineering-type></col>
+</schema>
+<row>
+<weight id="1" fmt="1.00 ms">1000000</weight>
+<backtrace id="2">
+<frame id="3" addr="0xdeadbeef">
+<binary id="4" name="MysteryLib" UUID="X" arch="arm64e" load-addr="0x0" path="/dev/null"/>
+</frame>
+</backtrace>
+</row>
+</node></trace-query-result>`;
+    const result = analyzeTimeProfileFromXml(minimal, "/fake/minimal.trace");
+    expect(result.totalSamples).toBe(1);
+    expect(result.topSymbols[0]).toEqual({
+      symbol: "MysteryLib",
+      samples: 1,
+    });
+  });
 });
 
 describe("correlateTimeProfileToHangs (v1.12)", () => {

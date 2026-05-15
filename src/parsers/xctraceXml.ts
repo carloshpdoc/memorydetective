@@ -18,10 +18,15 @@ export interface XctraceTable {
  * `raw` is the underlying value (timestamp in ns, duration in ns, etc.).
  * `nested` is present when the value contains structured sub-elements
  * (e.g. a thread cell containing tid + process + pid).
+ *
+ * The `name` field carries the `@_name` attribute used by xctrace for
+ * `<frame name="..." />` and `<binary name="..." />` elements in stack
+ * backtraces. Without it, time-profile rows lose their symbol metadata.
  */
 export interface XctraceValue {
   raw?: string;
   fmt?: string;
+  name?: string;
   nested?: Record<string, XctraceValue>;
 }
 
@@ -84,6 +89,8 @@ function nodeToValue(
   const resolved = resolveRef(node, byId);
   const value: XctraceValue = {};
   if (typeof resolved["@_fmt"] === "string") value.fmt = resolved["@_fmt"];
+  // Frame/binary elements carry the symbol/library name in @_name.
+  if (typeof resolved["@_name"] === "string") value.name = resolved["@_name"];
 
   // Body text — appears as #text after parsing.
   const text = resolved["#text"];

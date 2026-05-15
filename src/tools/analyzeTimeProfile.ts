@@ -31,6 +31,8 @@ export interface SampleEntry {
   weightFmt?: string;
   threadName?: string;
   symbol?: string;
+  /** Binary name for the leaf frame (e.g. "CoreFoundation", "libsystem_kernel.dylib"). Useful when the symbol is an unsymbolicated hex address. */
+  binary?: string;
 }
 
 export interface AnalyzeTimeProfileResult {
@@ -83,15 +85,34 @@ export function analyzeTimeProfileFromXml(
   for (const row of tp.rows) {
     const weight = asNumber(row.weight);
     const weightFmt = asFormatted(row.weight);
-    // Symbol may live under 'backtrace' or 'symbol' or as a nested cell.
+    // xctrace's time-profile schema names the backtrace column `stack`
+    // (mnemonic), with the underlying engineering-type `backtrace`. The
+    // parser keys cells by mnemonic, so the cell is at `row.stack`.
+    //
+    // The leaf frame's @_name attribute is the symbol when it could be
+    // resolved (e.g. `_CFRunLoopRunSpecificWithOptions`) or a raw hex
+    // address when unsymbolicated. In the unsymbolicated case we keep
+    // the binary name (e.g. `libsystem_kernel.dylib`) so aggregations
+    // still cluster by library instead of every sample being a unique
+    // address. Pre-2026-05-15 the parser only read `@_fmt` so this whole
+    // metadata was invisible and `topSymbols` was just the weight column
+    // text repeating "1.00 ms" for every sample.
+    const leafFrame = row.stack?.nested?.frame;
+    const binary = leafFrame?.nested?.binary?.name;
+    const frameName = leafFrame?.name;
+    // Real Apple traces expose the symbol on the leaf frame's @_name; some
+    // synthetic test fixtures use a dedicated <symbol> column instead. Try
+    // the stack first, fall back to the dedicated column.
     const symbol =
-      asFormatted(row.symbol) ??
-      asFormatted(row["weight"]) ??
-      row.backtrace?.fmt ??
-      row.backtrace?.raw ??
-      undefined;
+      pickSymbol(frameName, binary) ?? asFormatted(row.symbol) ?? undefined;
     const threadName = row.thread?.fmt ?? undefined;
-    rows.push({ weight, weightFmt, symbol, threadName });
+    rows.push({
+      weight,
+      weightFmt,
+      ...(symbol ? { symbol } : {}),
+      ...(binary ? { binary } : {}),
+      ...(threadName ? { threadName } : {}),
+    });
     if (symbol) {
       symbolCounts.set(symbol, (symbolCounts.get(symbol) ?? 0) + 1);
     }
@@ -118,6 +139,20 @@ export function analyzeTimeProfileFromXml(
         : `${rows.length} samples; top symbol: ${topSymbols[0]?.symbol ?? "unknown"} (${topSymbols[0]?.samples ?? 0} samples).`,
     status: "available",
   };
+}
+
+/**
+ * Pick the most useful identifier for a sample given the leaf frame name +
+ * binary. Resolved symbol wins; otherwise we cluster by binary so the
+ * aggregation is still meaningful for unsymbolicated traces.
+ */
+function pickSymbol(
+  frameName: string | undefined,
+  binary: string | undefined,
+): string | undefined {
+  if (frameName && !/^0x[0-9a-f]+$/i.test(frameName)) return frameName;
+  if (binary) return frameName ? `${binary} (${frameName})` : binary;
+  return frameName;
 }
 
 const SIGSEGV_NOTICE = `xctrace crashed exporting the time-profile schema (SIGSEGV). This is a known issue with heavy time-profile data and unsymbolicated traces.
