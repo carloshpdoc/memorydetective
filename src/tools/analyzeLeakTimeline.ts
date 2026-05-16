@@ -147,6 +147,7 @@ export function analyzeLeakTimelineFromXml(
   }
 
   const events: LeakEvent[] = [];
+  let rowsSkippedNoClass = 0;
   for (const row of table.rows) {
     const startNs = pickNumber(row, ["time", "event-time", "start", "sample-time"]) ?? 0;
     const className = pickString(row, [
@@ -156,7 +157,10 @@ export function analyzeLeakTimelineFromXml(
       "type-name",
       "leak-type",
     ]) ?? "";
-    if (!className) continue;
+    if (!className) {
+      rowsSkippedNoClass += 1;
+      continue;
+    }
     const cumulativeCount = pickNumber(row, [
       "count",
       "cumulative-count",
@@ -215,6 +219,26 @@ export function analyzeLeakTimelineFromXml(
 
   const lastEventNs = events.reduce((max, e) => Math.max(max, e.startNs), 0);
 
+  // v1.17 B-14: detect parser mismatch. If the schema had rows but every
+  // single row was skipped because no className column matched any of our
+  // candidate field names, surface that as `partial` status + diagnostic
+  // reason instead of letting it look like genuine absence.
+  const totalRowsInSchema = events.length + rowsSkippedNoClass;
+  const allRowsLackedClassName =
+    totalRowsInSchema > 0 && events.length === 0;
+  const supportEntry: SupportStatus = allRowsLackedClassName
+    ? {
+        kind: "leak-events",
+        status: "partial",
+        sourceSchemas: ["leaks"],
+        reason: `${rowsSkippedNoClass} rows in schema but none had a parseable className. Expected one of: class / class-name / type / type-name / leak-type. The xctrace schema may use a different column name on your iOS / Xcode version.`,
+      }
+    : {
+        kind: "leak-events",
+        status: "available",
+        sourceSchemas: ["leaks"],
+      };
+
   return {
     ok: true,
     tracePath,
@@ -224,15 +248,11 @@ export function analyzeLeakTimelineFromXml(
       ...(lastEventNs > 0 ? { lastEventNs } : {}),
     },
     topClasses,
-    diagnosis: buildDiagnosis(events.length, byClass.size, topClasses),
-    status: "available",
-    supportStatus: [
-      {
-        kind: "leak-events",
-        status: "available",
-        sourceSchemas: ["leaks"],
-      },
-    ],
+    diagnosis: allRowsLackedClassName
+      ? `${rowsSkippedNoClass} leak events in the schema but the className column was not in the expected set (class / class-name / type / type-name / leak-type). Likely a column-name drift on your iOS / Xcode version.`
+      : buildDiagnosis(events.length, byClass.size, topClasses),
+    status: allRowsLackedClassName ? "partial" : "available",
+    supportStatus: [supportEntry],
   };
 }
 

@@ -143,7 +143,12 @@ function pickNumber(row: Record<string, XctraceValue>, keys: string[]): number |
 }
 
 /** Extract a host string from a URL-or-host value. Falls back to the
- *  raw input when it does not look like a URL (already a host). */
+ *  raw input when it does not look like a URL (already a host).
+ *
+ *  Handles IPv4, IPv6 (with `[::1]:port/path` bracket form), and bare
+ *  hostnames. v1.17 fixed the IPv6 edge case where bracket-form was
+ *  yielding `[` because the colon-from-start search hit the IPv6
+ *  delimiter before the port colon. */
 export function extractHost(urlOrHost: string | undefined): string | undefined {
   if (!urlOrHost) return undefined;
   // Strip scheme + path. Accepts http://host:port/path, host:port/path, bare host.
@@ -152,6 +157,12 @@ export function extractHost(urlOrHost: string | undefined): string | undefined {
     .replace(/^.*?:\/\//, "");
   const slash = stripped.indexOf("/");
   const hostPort = slash >= 0 ? stripped.slice(0, slash) : stripped;
+  // IPv6 in bracket form: `[::1]:8080` -> host is `::1`. Detect first.
+  if (hostPort.startsWith("[")) {
+    const closeBracket = hostPort.indexOf("]");
+    if (closeBracket > 0) return hostPort.slice(1, closeBracket);
+    // Malformed: opening bracket but no close. Fall through.
+  }
   // Drop the trailing :port for cleaner aggregation.
   const colon = hostPort.indexOf(":");
   return colon >= 0 ? hostPort.slice(0, colon) : hostPort;

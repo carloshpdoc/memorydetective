@@ -133,7 +133,6 @@ export function analyzeMemoryFootprintFromXml(
   // already validated in schemaDiscovery.
   const table = tables.find(
     (t) =>
-      t.schema === "memory-footprint" ||
       /memory-footprint/i.test(t.schema) ||
       /resident-memory/i.test(t.schema),
   );

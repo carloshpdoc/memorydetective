@@ -96,6 +96,24 @@ describe("analyzeLeakTimelineFromXml", () => {
     expect(r.supportStatus[0].sourceSchemas).toEqual(["leaks"]);
   });
 
+  it("v1.17 B-14: surfaces partial status when all rows lack a parseable className (column drift detection)", () => {
+    const driftedSchema = `<?xml version="1.0"?>
+<trace-query-result><node><schema name="leaks">
+<col><mnemonic>time</mnemonic><name>Time</name><engineering-type>event-time</engineering-type></col>
+<col><mnemonic>weird-column-name</mnemonic><name>Class</name><engineering-type>short-string</engineering-type></col>
+</schema>
+<row><time id="1" fmt="00:01.000">1000000000</time><weird-column-name id="2" fmt="AVPlayerItem">AVPlayerItem</weird-column-name></row>
+<row><time id="3" fmt="00:02.000">2000000000</time><weird-column-name id="4" fmt="DetailViewModel">DetailViewModel</weird-column-name></row>
+</node></trace-query-result>`;
+    const r = analyzeLeakTimelineFromXml(driftedSchema, "/fake.trace");
+    expect(r.status).toBe("partial");
+    expect(r.supportStatus[0].status).toBe("partial");
+    expect(r.supportStatus[0].reason).toMatch(/column-name drift|column name|parseable className/i);
+    expect(r.diagnosis).toMatch(/drift|expected/i);
+    // Schema absence vs parser mismatch: this is mismatch.
+    expect(r.totals.rows).toBe(0);
+  });
+
   it("rows without a className are skipped (defensive)", () => {
     const skip = `<?xml version="1.0"?>
 <trace-query-result><node><schema name="leaks">

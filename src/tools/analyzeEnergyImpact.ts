@@ -108,14 +108,20 @@ function pickString(
 }
 
 /** Normalize whatever string xctrace puts in the bucket column to our
- *  canonical enum. v1.15. Exported for testing. */
+ *  canonical enum. v1.15. Exported for testing.
+ *
+ *  v1.17: priority order fixed. "active" / "foreground" / "passive" /
+ *  "background" are checked BEFORE "high" so strings like "highly active"
+ *  classify as `active` (per the dominant lexical signal) instead of
+ *  `high`. Long-tail edge case from real xctrace output, but observed
+ *  enough to warrant the reorder. */
 export function normalizeBucket(raw: string | undefined): EnergyBucket {
   if (!raw) return "unknown";
   const lc = raw.toLowerCase();
   if (lc.includes("idle")) return "idle";
-  if (lc.includes("high")) return "high";
   if (lc.includes("active") || lc.includes("foreground")) return "active";
   if (lc.includes("passive") || lc.includes("background")) return "passive";
+  if (lc.includes("high")) return "high";
   return "unknown";
 }
 

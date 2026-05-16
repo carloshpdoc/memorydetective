@@ -109,4 +109,11 @@ describe("normalizeBucket", () => {
     expect(normalizeBucket("")).toBe("unknown");
     expect(normalizeBucket(undefined)).toBe("unknown");
   });
+
+  it("v1.17 B-12: 'active' / 'foreground' / 'passive' take priority over 'high'", () => {
+    expect(normalizeBucket("highly active")).toBe("active");
+    expect(normalizeBucket("active high")).toBe("active");
+    expect(normalizeBucket("foreground high-priority")).toBe("active");
+    expect(normalizeBucket("background-high")).toBe("passive");
+  });
 });

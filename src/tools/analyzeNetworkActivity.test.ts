@@ -159,4 +159,21 @@ describe("extractHost helper", () => {
     expect(extractHost(undefined)).toBeUndefined();
     expect(extractHost("")).toBeUndefined();
   });
+
+  it("handles IPv6 in bracket form with port (v1.17 B-11)", () => {
+    expect(extractHost("http://[::1]:8080/health")).toBe("::1");
+    expect(extractHost("https://[2001:db8::1]:443/api")).toBe("2001:db8::1");
+  });
+
+  it("handles IPv6 in bracket form without port", () => {
+    expect(extractHost("http://[::1]/")).toBe("::1");
+  });
+
+  it("falls through gracefully on malformed bracket (no close)", () => {
+    // Open bracket without close: fall back to colon-based split.
+    // Documents we don't crash on weird input rather than asserting a
+    // specific semantic; the result is undefined-shaped.
+    const result = extractHost("http://[::1");
+    expect(typeof result).toBe("string");
+  });
 });
