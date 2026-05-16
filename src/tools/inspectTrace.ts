@@ -312,15 +312,36 @@ export async function inspectTrace(
   // export" against real Apple-produced .trace bundles (validated 2026-05-15
   // against wishlist-tti-device.trace). The --toc flag returns the full
   // table-of-contents XML including all `<table schema="..."/>` elements.
+  //
+  // v1.17 B-05: be fault-tolerant. xctrace can refuse a bundle for many
+  // reasons (52K Document Missing Template Error bundles from the
+  // macOS 26.x `--time-limit` regression, corrupted writes, partial
+  // copies). Throwing on those breaks the whole MCP call. Instead, return
+  // `ok: true` with empty schemas + diagnosis text so the agent can still
+  // see the file size and read the failure reason. Throwing is reserved
+  // for unrecoverable input (missing trace path, already handled above).
   const result = await runCommand(
     "xcrun",
     ["xctrace", "export", "--input", tracePath, "--toc"],
     { timeoutMs: 60_000 },
   );
   if (result.code !== 0) {
-    throw new Error(
-      `xctrace export --toc failed (code ${result.code}): ${result.stderr || result.stdout || "<no output>"}`,
-    );
+    const reason =
+      result.stderr.trim() || result.stdout.trim() || "<no output>";
+    return {
+      ok: true,
+      tracePath,
+      schemas: [],
+      rowCounts: {},
+      suggestedNextCalls: [],
+      diagnosis:
+        `xctrace could not export the trace bundle's table-of-contents ` +
+        `(exit code ${result.code}). Common causes: the bundle is a stub ` +
+        `from the macOS 26.x \`xctrace --time-limit\` regression (look for ` +
+        `Document Missing Template Error around ~52K), a partial copy, or ` +
+        `permissions on a code-signed bundle. xctrace stderr: ${reason}`,
+      ...(fileSize != null ? { fileSize } : {}),
+    };
   }
   const parsed = parseTraceToc(result.stdout, tracePath);
 

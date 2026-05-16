@@ -123,6 +123,17 @@ export interface RecordTimeProfileResult {
    */
   recordingTimedOut?: boolean;
   /**
+   * v1.17 B-09. Reports whether the .trace bundle on disk is
+   * salvageable. `unknown` when recording succeeded normally
+   * (the caller can run inspectTrace to confirm). `salvageable` when
+   * a timeout / SIGINT path produced a bundle with the canonical
+   * Trace1.run/MANIFEST.plist marker (xctrace flushed cleanly).
+   * `wedged` when the bundle is missing MANIFEST.plist (the macOS 26.x
+   * regression signature; xctrace export will reject it). Use this to
+   * branch without re-checking the filesystem.
+   */
+  bundleStatus?: "unknown" | "salvageable" | "wedged";
+  /**
    * Present when `recordingTimedOut` is true. Documents the
    * `xctrace --time-limit` regression observed on macOS 26.x simulators
    * and the practical mitigations.
@@ -284,6 +295,26 @@ export async function preflightXctraceRecord(
 }
 
 /**
+ * v1.17 B-09. Classify a `.trace` bundle on disk by the canonical
+ * markers xctrace writes. The `MANIFEST.plist` file under `Trace1.run/`
+ * is the marker of a complete export; absent means xctrace was killed
+ * before flushing (the macOS 26.x wedge signature).
+ *
+ * Returns `unknown` when the path doesn't exist (caller error).
+ * Used by recordTimeProfile to surface `bundleStatus` on the response.
+ *
+ * Exported so other tools (recordViaInstrumentsApp, etc.) can share
+ * the heuristic.
+ */
+export function classifyBundleOnDisk(
+  tracePath: string,
+): "unknown" | "salvageable" | "wedged" {
+  if (!existsSync(tracePath)) return "unknown";
+  const manifest = `${tracePath}/Trace1.run/MANIFEST.plist`;
+  return existsSync(manifest) ? "salvageable" : "wedged";
+}
+
+/**
  * v1.14 item J. When a `recordTimeProfile` call times out, optionally
  * launch the partial `.trace` in Instruments.app so the user has a GUI
  * escape hatch. Returns `true` when `open -a Instruments <tracePath>`
@@ -412,6 +443,9 @@ export async function recordTimeProfile(
   });
   if (result.timedOut) {
     const openedInInstrumentsApp = maybeOpenInInstruments(output);
+    // v1.17 B-09: classify the bundle before returning so the caller
+    // does not need to re-check the filesystem.
+    const bundleStatus = classifyBundleOnDisk(output);
     return {
       ok: false,
       command: `xcrun ${args.join(" ")}`,
@@ -426,6 +460,7 @@ export async function recordTimeProfile(
         fallbacks: XCTRACE_TIMEOUT_FALLBACKS,
       },
       openedInInstrumentsApp,
+      bundleStatus,
     };
   }
   if (result.code !== 0) {

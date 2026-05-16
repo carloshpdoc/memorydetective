@@ -156,6 +156,48 @@ export async function fetchDiscoveredSchemas<F extends SchemaFamily>(
   tracePath: string,
   families: readonly F[],
 ): Promise<Record<F, string>> {
+  const { schemas } = await fetchDiscoveredSchemasWithStatus(
+    runCommand,
+    tracePath,
+    families,
+  );
+  return schemas;
+}
+
+/**
+ * v1.17 B-06. Same as {@link fetchDiscoveredSchemas} but also returns a
+ * discovery status so callers can surface "we fell back" via the unified
+ * `supportStatus[]` instead of silently using canonical names.
+ *
+ * Status values:
+ *
+ * - `ok`: TOC fetched, pattern match succeeded for at least one family.
+ *   (When a specific family does not match, the canonical name is still
+ *   returned for it, but the overall status is still `ok` because the TOC
+ *   itself was readable.)
+ * - `failed`: `xctrace --toc` returned non-zero, or threw, or returned
+ *   empty stdout. `schemas` are all canonical fallbacks.
+ *
+ * The legacy `fetchDiscoveredSchemas` keeps its existing silent-fallback
+ * contract for callers that do not care.
+ */
+export interface SchemaDiscoveryStatus<F extends SchemaFamily> {
+  schemas: Record<F, string>;
+  status: "ok" | "failed";
+  /** When status is `failed`, a short reason suitable for `supportStatus.reason`. */
+  reason?: string;
+}
+
+export async function fetchDiscoveredSchemasWithStatus<F extends SchemaFamily>(
+  runCommand: SchemaDiscoveryRunner,
+  tracePath: string,
+  families: readonly F[],
+): Promise<SchemaDiscoveryStatus<F>> {
+  const fallback = (): Record<F, string> => {
+    const out = {} as Record<F, string>;
+    for (const f of families) out[f] = CANONICAL_SCHEMA_NAME[f];
+    return out;
+  };
   try {
     const result = await runCommand(
       "xcrun",
@@ -163,15 +205,39 @@ export async function fetchDiscoveredSchemas<F extends SchemaFamily>(
       { timeoutMs: 60_000 },
     );
     if (result.code !== 0) {
-      // TOC fetch failed; return canonical fallback.
-      const out = {} as Record<F, string>;
-      for (const f of families) out[f] = CANONICAL_SCHEMA_NAME[f];
-      return out;
+      const reason =
+        `xctrace --toc failed (code ${result.code}): ` +
+        (result.stderr.trim() || result.stdout.trim() || "<no output>");
+      warnSchemaDiscoveryOnce(tracePath, reason);
+      return { schemas: fallback(), status: "failed", reason };
     }
-    return discoverSchemas(result.stdout, families);
-  } catch {
-    const out = {} as Record<F, string>;
-    for (const f of families) out[f] = CANONICAL_SCHEMA_NAME[f];
-    return out;
+    if (!result.stdout.trim()) {
+      const reason = "xctrace --toc returned empty stdout";
+      warnSchemaDiscoveryOnce(tracePath, reason);
+      return { schemas: fallback(), status: "failed", reason };
+    }
+    return { schemas: discoverSchemas(result.stdout, families), status: "ok" };
+  } catch (err) {
+    const reason = `xctrace --toc threw: ${(err as Error)?.message ?? String(err)}`;
+    warnSchemaDiscoveryOnce(tracePath, reason);
+    return { schemas: fallback(), status: "failed", reason };
   }
+}
+
+const schemaDiscoveryWarnings = new Set<string>();
+function warnSchemaDiscoveryOnce(tracePath: string, reason: string): void {
+  const key = `${tracePath}:${reason}`;
+  if (schemaDiscoveryWarnings.has(key)) return;
+  schemaDiscoveryWarnings.add(key);
+  // Respect the global stderr-mute used elsewhere in the codebase.
+  if (process.env.MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY) return;
+  process.stderr.write(
+    `[memorydetective] schemaDiscovery: ${reason} (path: ${tracePath}). ` +
+      `Analyzers will use canonical schema names; results may be stale on traces that renamed schemas.\n`,
+  );
+}
+
+/** Test hook — clears the one-time warning dedupe. */
+export function _resetSchemaDiscoveryWarningsForTests(): void {
+  schemaDiscoveryWarnings.clear();
 }

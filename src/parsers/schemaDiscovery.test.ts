@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   CANONICAL_SCHEMA_NAME,
   SCHEMA_FAMILIES,
   discoverSchema,
   discoverSchemas,
   extractSchemaNamesFromToc,
+  fetchDiscoveredSchemasWithStatus,
+  _resetSchemaDiscoveryWarningsForTests,
 } from "./schemaDiscovery.js";
 
 const APPLE_REAL_TOC = `<?xml version="1.0"?>
@@ -142,6 +144,76 @@ describe("discoverSchemas (bulk)", () => {
       hangs: CANONICAL_SCHEMA_NAME.hangs,
       network: CANONICAL_SCHEMA_NAME.network,
     });
+  });
+});
+
+describe("v1.17 B-06: fetchDiscoveredSchemasWithStatus", () => {
+  beforeEach(() => {
+    _resetSchemaDiscoveryWarningsForTests();
+    // Suppress the stderr warning during tests (also gates schemaDiscovery's
+    // one-time warning), keeps output clean.
+    process.env.MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY = "1";
+  });
+
+  it("returns status: 'ok' on a healthy --toc fetch and resolves names from patterns", async () => {
+    const fakeRun = async () => ({
+      code: 0,
+      stdout: APPLE_REAL_TOC,
+      stderr: "",
+    });
+    const result = await fetchDiscoveredSchemasWithStatus(
+      fakeRun,
+      "/tmp/fake.trace",
+      ["hangs", "time-profile"] as const,
+    );
+    expect(result.status).toBe("ok");
+    expect(result.schemas.hangs).toBe("potential-hangs");
+    expect(result.schemas["time-profile"]).toBe("time-profile");
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("returns status: 'failed' with reason when xctrace --toc exits non-zero", async () => {
+    const fakeRun = async () => ({
+      code: 1,
+      stdout: "",
+      stderr: "xctrace: error: trace bundle unreadable",
+    });
+    const result = await fetchDiscoveredSchemasWithStatus(
+      fakeRun,
+      "/tmp/wedged.trace",
+      ["hangs"] as const,
+    );
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("xctrace --toc failed (code 1)");
+    expect(result.reason).toContain("trace bundle unreadable");
+    // Falls back to canonical so analyzer pipeline still works.
+    expect(result.schemas.hangs).toBe(CANONICAL_SCHEMA_NAME.hangs);
+  });
+
+  it("returns status: 'failed' on thrown error inside the runner", async () => {
+    const fakeRun = async () => {
+      throw new Error("spawn ENOENT");
+    };
+    const result = await fetchDiscoveredSchemasWithStatus(
+      fakeRun,
+      "/tmp/fake.trace",
+      ["allocations"] as const,
+    );
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("xctrace --toc threw");
+    expect(result.reason).toContain("spawn ENOENT");
+    expect(result.schemas.allocations).toBe(CANONICAL_SCHEMA_NAME.allocations);
+  });
+
+  it("returns status: 'failed' when stdout is empty (TOC absent)", async () => {
+    const fakeRun = async () => ({ code: 0, stdout: "  \n  ", stderr: "" });
+    const result = await fetchDiscoveredSchemasWithStatus(
+      fakeRun,
+      "/tmp/empty.trace",
+      ["memory"] as const,
+    );
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("empty stdout");
   });
 });
 

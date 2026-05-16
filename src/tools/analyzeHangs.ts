@@ -387,24 +387,34 @@ export function analyzeHangsFromXml(
       : {}),
     diagnosis,
     status: "available",
+    // v1.17 B-08: supportStatus[] ALWAYS includes both potential-hangs
+    // and hang-risks entries so consumers can disambiguate the four
+    // distinct states by inspecting the array:
+    //   1. potential-hangs available + hang-risks available -> both schemas had rows
+    //   2. potential-hangs available + hang-risks not_present (reason: schema empty) -> exported, no rows
+    //   3. potential-hangs available + hang-risks not_present (reason: caller did not provide hangRisksXml) -> caller skipped
+    //   4. potential-hangs not_present (handled in the early-return branch above)
     supportStatus: [
       {
         kind: "potential-hangs",
         status: "available",
         sourceSchemas: ["potential-hangs"],
       },
-      ...(risksAnalysis
-        ? ([
-            {
-              kind: "hang-risks",
-              status: risksAnalysis.total > 0 ? "available" : "not_present",
-              sourceSchemas: ["hang-risks"],
-              ...(risksAnalysis.total === 0
-                ? { reason: "Schema exported but no rows present." }
-                : {}),
-            },
-          ] as SupportStatus[])
-        : []),
+      risksAnalysis
+        ? ({
+            kind: "hang-risks",
+            status: risksAnalysis.total > 0 ? "available" : "not_present",
+            sourceSchemas: ["hang-risks"],
+            ...(risksAnalysis.total === 0
+              ? { reason: "Schema exported but no rows present." }
+              : {}),
+          } as SupportStatus)
+        : ({
+            kind: "hang-risks",
+            status: "not_present",
+            reason:
+              "Caller did not provide hangRisksXml; pass the hang-risks export to opt in.",
+          } as SupportStatus),
     ],
   };
 }

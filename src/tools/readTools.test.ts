@@ -165,6 +165,61 @@ describe("countAlive sortBy + instanceSize (v1.14 item L)", () => {
       instanceSizeBytes: 48,
     });
   });
+
+  it("v1.17 B-07: variable-size classes report min/max/median, fixed-size classes do not", () => {
+    // Pre-v1.17 we reported only the first observed size as canonical,
+    // which misled callers for NSData / NSString / CFData (each instance
+    // has a payload-dependent size). Now: equal sizes -> single value;
+    // unequal sizes -> median + spread.
+    const node = (className: string, instanceSize: number): CycleNode => ({
+      raw: `${className}<0xdead> [${instanceSize}]`,
+      retainKind: "ROOT_CYCLE",
+      className,
+      address: "0xdead",
+      instanceSize,
+      isRootCycle: true,
+      isCycleBack: false,
+      indent: 0,
+      children: [],
+    });
+    const fakeReport: LeaksReport = {
+      header: { processName: "Demo", pid: 0, sourcePath: "/dev/null" },
+      totals: { leaks: 5, rootCycles: 0, indirectLeaks: 0 },
+      cycles: [
+        // Fixed-size class: 3 instances all 32 bytes.
+        { ...node("FixedSizeClass", 32) },
+        { ...node("FixedSizeClass", 32) },
+        { ...node("FixedSizeClass", 32) },
+        // Variable-size class: 5 NSData instances with different payloads.
+        { ...node("NSData", 64) },
+        { ...node("NSData", 256) },
+        { ...node("NSData", 1024) },
+        { ...node("NSData", 4096) },
+        { ...node("NSData", 16384) },
+      ],
+    };
+    const acc = countByClassWithBytes(fakeReport);
+
+    const fixed = acc.get("FixedSizeClass");
+    expect(fixed).toEqual({
+      count: 3,
+      totalBytes: 96,
+      instanceSizeBytes: 32,
+    });
+    // No spread fields for fixed-size classes.
+    expect("instanceSizeBytesMin" in fixed!).toBe(false);
+    expect("instanceSizeBytesMax" in fixed!).toBe(false);
+
+    const variable = acc.get("NSData");
+    expect(variable?.count).toBe(5);
+    expect(variable?.totalBytes).toBe(64 + 256 + 1024 + 4096 + 16384);
+    expect(variable?.instanceSizeBytesMin).toBe(64);
+    expect(variable?.instanceSizeBytesMax).toBe(16384);
+    expect(variable?.instanceSizeBytesMedian).toBe(1024); // odd-length sorted: middle
+    // instanceSizeBytes mirrors median for variable-size classes (was
+    // first-observed pre-v1.17, which was misleading).
+    expect(variable?.instanceSizeBytes).toBe(1024);
+  });
 });
 
 describe("diffReferenceTrees (v1.11)", () => {
