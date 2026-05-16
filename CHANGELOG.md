@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-05-16
+
+Reliability pass. v1.16 closed the macOS 26.x recording gap with `recordViaInstrumentsApp`. v1.17 sweeps the audit punch list that surfaced after dogfooding: 14 bugs across three tiers, 3 known limitations documented, 3 tech-debt items deferred. The headlines are env-var truthy parsing (every `MEMORYDETECTIVE_*` boolean now accepts `1 / true / yes / on`, was `1`-only), a `verifyFix` whitelist that supports exact / substring / regex modes (was substring-only), the `recordViaInstrumentsApp` watcher catching saves outside the watch dir, and the `inspectTrace` fault-tolerant fallback so a wedged 52K bundle no longer throws. 41 MCP tools, 701 tests (+24 vs v1.16).
+
+### Fixed
+
+#### Tier 1 (user-visible)
+
+- **`recordViaInstrumentsApp` watcher misses saves outside `watchDir` (B-01).** Pre-v1.17 the tool only watched the filesystem path; users who hit Save in Instruments.app and accepted the default Desktop location would time out even though the trace was on disk. Now queries the running Instruments.app via AppleScript every poll for any `document` whose file path was set after the tool started; on first match outside `watchDir` returns the path with `savedOutsideWatchDir: true`. Uses the documented `Instruments.sdef` `file of document` accessor only (no unsupported verbs).
+- **`verifyFix.expectedAliveClasses` supports per-entry mode (B-02).** Pre-v1.17 every whitelist entry was matched as a case-insensitive substring. Caller wanting "match exactly `UIRemoteKeyboardWindow`, do not match `MyUIRemoteKeyboardWindowWrapper`" had no way to express it. Schema now accepts `string` (defaults to substring for backwards compat) or `{ pattern: string, mode: "exact" | "substring" | "regex" }`. ESLint and Jest both use single-mode matching, but their users have asked for the inverse in tracked issues; we picked the opposite trade-off.
+- **`MEMORYDETECTIVE_*` env booleans accept the strtobool truthy set (B-03).** Pre-v1.17 only the literal string `1` turned a gate on. Users exporting `MEMORYDETECTIVE_ALLOW_LAUNCH=true` or `=yes` saw silent no-op behavior. v1.17 normalizes the five booleans through `parseBooleanEnv`, which accepts `1 / true / t / yes / y / on` (truthy) and `0 / false / f / no / n / off` (falsy), case-insensitive. Unrecognized values emit a one-time stderr warning per var so the operator knows the setting was ignored. Mirrors `envalid`'s `bool()` semantics without taking the dependency.
+- **`maybeOpenInInstruments` checks bundle viability before opening (B-04).** Pre-v1.17 the auto-open path would launch a wedged 52K macOS 26.x stub bundle in Instruments.app, where it presents a Document Missing Template Error dialog the operator has to dismiss. Now probes `Trace1.run/MANIFEST.plist` before calling `open`; on missing manifest, skips the open and surfaces the bundle status to the caller. The exported `classifyBundleOnDisk(tracePath)` helper returns `"unknown" | "salvageable" | "wedged"` for reuse.
+
+#### Tier 2 (silently sub-optimal)
+
+- **`inspectTrace` fault-tolerant fallback when `xctrace export --toc` fails (B-05).** Pre-v1.17 a failed TOC export threw, which broke the entire MCP call. Now returns `ok: true` with `schemas: []`, `rowCounts: {}`, `suggestedNextCalls: []`, and a diagnosis string naming the 52K macOS 26.x stub pattern so callers can self-diagnose. Throwing is reserved for missing trace paths.
+- **`schemaDiscovery.fetchDiscoveredSchemasWithStatus` surfaces failures (B-06).** New sibling of `fetchDiscoveredSchemas` returns `{ schemas, status: "ok" | "failed", reason? }` so trace analyzers can include a discovery-failure entry in `supportStatus[]` instead of silently using canonical schema names against a renamed-schema trace. Emits a one-time stderr warning per `tracePath:reason`, gated on `MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY`. Legacy `fetchDiscoveredSchemas` keeps its silent-fallback contract.
+- **`countByClassWithBytes` reports min/max/median for variable-size classes (B-07).** Pre-v1.17 we returned the first observed `instanceSize` as canonical for every class. Misled callers inspecting `NSData`, `NSString`, `CFData` whose per-instance size is payload-dependent. Now: fixed-size classes return a single `instanceSizeBytes` value as before; variable-size classes return `{ instanceSizeBytes: median, instanceSizeBytesMin, instanceSizeBytesMax, instanceSizeBytesMedian }`. `totalBytes` unchanged. `CountAliveEntry` propagates the spread through per-class and topN paths.
+- **`analyzeHangs.supportStatus[]` always includes both schema entries (B-08).** Pre-v1.17 a caller without `hangRisksXml` saw a single entry, a caller with it saw two. Agent code branching on `supportStatus.find(s => s.kind === "hang-risks")` could not distinguish "I did not ask" from "schema absent". Both entries are now always present; the missing-XML path returns `status: "not_present"` with reason `"caller did not provide hangRisksXml"`.
+- **`recordTimeProfile.bundleStatus` reflects on-disk reality (B-09).** New `bundleStatus: "unknown" | "salvageable" | "wedged"` field on the response. The timeout path now probes `MANIFEST.plist` via `classifyBundleOnDisk` so callers branching on `tracePath ? "have trace" : "no trace"` get an honest signal.
+- **`countAlive` framework-noise filter is configurable (B-10).** New inputs: `excludeFrameworkNoise: boolean` (default true), `additionalNoisePatterns?: string[]`, `unsuppressClassPatterns?: string[]`, `noiseAuditMode: boolean`. The curated noise list (calibrated for the v1.5 notelet investigation) remains the default. Audit mode returns a `noiseAudit[]` array listing every filtered class with reason `'default-list'`, `'additional-pattern'`, or `'kept-by-unsuppress'`. User-supplied regex strings compile with a literal-escape fallback on syntax errors.
+
+#### Tier 3 (edge case / cosmetic)
+
+- **`extractHost` parses IPv6 bracket form (B-11).** `analyzeNetworkActivity` was misreporting hosts like `[::1]:443` as the empty string. Now strips brackets and splits the port correctly.
+- **`normalizeBucket` priority fix (B-12).** `analyzeEnergyImpact` was matching `"high"` before `"foreground"` in xctrace's varying-case bucket strings. Reordered to check the named buckets first.
+- **Redundant `t.schema === "memory-footprint"` equality removed (B-13).** `analyzeMemoryFootprint` was double-checking after `discoverSchemas` already resolved the family name.
+- **`analyzeLeakTimeline` handles column-drift gracefully (B-14).** When every row is skipped due to missing `className`, returns `status: "partial"` with a reason naming the column drift instead of silently emitting an empty timeline.
+
+### Behavior changes (informational)
+
+- The `MEMORYDETECTIVE_*` boolean env vars are now case-insensitively recognized for the strtobool set. Setting `=yes` or `=true` now turns gates on; pre-v1.17 it did not. Operators who deliberately set unrecognized values will see a stderr warning but no behavioral change (unrecognized falls back to default).
+- `verifyFix.expectedAliveClasses` string entries continue to behave as case-insensitive substring matches for backwards compat. The new object form `{ pattern, mode }` is opt-in.
+- The deprecated `notice` and `status` aliases on trace analyzers stay (will be removed in a future major bump).
+
 ## [1.16.0] - 2026-05-15
 
 macOS 26.x recording-unblock release. The single feature that v1.14 punted on. `xcrun xctrace record --time-limit Ns` is broken on macOS 26.x simulator targets (documented in v1.14). Instruments.app GUI still produces valid `.trace` bundles. v1.16 ships the wrapper that automates the surrounding choreography: open the app, prompt the user with step-by-step instructions, poll for the saved trace, chain into `inspectTrace` on success. 41 MCP tools, 677 tests.
