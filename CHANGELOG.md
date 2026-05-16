@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.17.1] - 2026-05-16
+
+Docs-only patch. Syncs the npm README + USAGE with the v1.17 surface notes shipped to GitHub right after v1.17.0 was published. No code changes.
+
+### Changed
+
+- README leads with the v1.17 reliability headlines; env-var table prefaced with the strtobool truthy parsing rule; macOS 26.x callout cites the new `bundleStatus` field on `recordTimeProfile`, the `savedOutsideWatchDir` field on `recordViaInstrumentsApp`, and the fault-tolerant `inspectTrace` fallback. Capture / record section renumbered from (3) to (4) with the previously-missing `recordViaInstrumentsApp` row. `verifyFix` + `countAlive` + `inspectTrace` + `recordTimeProfile` rows annotated with their v1.17 surface additions.
+- USAGE.md follow-up prompts table gained a `verifyFix` example using `{ pattern, mode: "exact" }`. Troubleshooting recovery list for the macOS 26.x recording wedge documents the `savedOutsideWatchDir` AppleScript fallback.
+
 ## [1.17.0] - 2026-05-16
 
 Reliability pass. v1.16 closed the macOS 26.x recording gap with `recordViaInstrumentsApp`. v1.17 sweeps the audit punch list that surfaced after dogfooding: 14 bugs across three tiers, 3 known limitations documented, 3 tech-debt items deferred. The headlines are env-var truthy parsing (every `MEMORYDETECTIVE_*` boolean now accepts `1 / true / yes / on`, was `1`-only), a `verifyFix` whitelist that supports exact / substring / regex modes (was substring-only), the `recordViaInstrumentsApp` watcher catching saves outside the watch dir, and the `inspectTrace` fault-tolerant fallback so a wedged 52K bundle no longer throws. 41 MCP tools, 701 tests (+24 vs v1.16).
