@@ -72,10 +72,18 @@ export const verifyFixSchema = z.object({
       "If provided, the verdict is gated on whether this specific patternId disappeared from `after`. Defaults to checking every classified pattern.",
     ),
   expectedAliveClasses: z
-    .array(z.string().min(1))
+    .array(
+      z.union([
+        z.string().min(1),
+        z.object({
+          pattern: z.string().min(1),
+          mode: z.enum(["exact", "substring", "regex"]).default("substring"),
+        }),
+      ]),
+    )
     .optional()
     .describe(
-      "v1.14+. Class names (substrings) that legitimately stay alive across the before/after snapshots. Singletons, framework registrars, persistent caches. When a class in this list appears in regressionClasses[], it is moved to expectedAlive[] and does not flip the verdict to FAIL. Merged with the curated default list (DebugSwift's ignoredViewControllerClassNames + ignoredViewClassNames + ignoredWindowClassNames) unless `disableDefaultWhitelist: true`.",
+      "v1.14+. Class names that legitimately stay alive across the before/after snapshots. Singletons, framework registrars, persistent caches. When a class in this list appears in regressionClasses[], it is moved to expectedAlive[] and does not flip the verdict to FAIL.\n\nEach entry can be a plain string (treated as case-insensitive substring, the v1.14 default behavior) OR an object `{ pattern: string, mode?: \"exact\" | \"substring\" | \"regex\" }` (v1.17+). Modes:\n- `exact`: case-insensitive full-string equality. Use for system class names that are stable.\n- `substring`: case-insensitive substring match (the v1.14 default).\n- `regex`: JavaScript regex (anchors / flags as written in the pattern). Use for nuanced class-name shapes.\n\nMerged with the curated default list (DebugSwift's ignoredViewControllerClassNames + ignoredViewClassNames + ignoredWindowClassNames, all `mode: \"exact\"`) unless `disableDefaultWhitelist: true`.",
     ),
   disableDefaultWhitelist: z
     .boolean()
@@ -394,37 +402,84 @@ const ABANDONED_MEMORY_TOPN = 100;
  * inaccessible, etc.); the caller falls back to the cycle-pattern result.
  */
 /**
- * Build the effective expected-alive whitelist by merging the curated
- * default list (unless disabled) with the user-supplied set. Returns a
- * lowercase Set for case-insensitive substring matching. v1.14.
+ * v1.17 B-02: typed rule object representing a single entry in the
+ * effective whitelist. Plain string inputs become `mode: "substring"`
+ * (preserves v1.14 default behavior). Object inputs honor their `mode`
+ * field. Default-list entries are `mode: "exact"` since system class
+ * names are stable.
  */
-function buildExpectedAliveSet(
-  userSupplied: readonly string[] | undefined,
-  disableDefault: boolean,
-): Set<string> {
-  const base = disableDefault ? [] : DEFAULT_EXPECTED_ALIVE_CLASSES;
-  const all = [...base, ...(userSupplied ?? [])];
-  return new Set(all.map((s) => s.toLowerCase()));
+interface WhitelistRule {
+  pattern: string;
+  mode: "exact" | "substring" | "regex";
+  /** Pre-built regex for `mode: "regex"`, undefined for other modes. */
+  compiled?: RegExp;
+}
+
+type WhitelistInput = string | { pattern: string; mode?: "exact" | "substring" | "regex" };
+
+function normalizeWhitelistEntry(
+  entry: WhitelistInput,
+  defaultMode: "exact" | "substring" | "regex" = "substring",
+): WhitelistRule {
+  if (typeof entry === "string") {
+    return { pattern: entry, mode: defaultMode };
+  }
+  const mode = entry.mode ?? defaultMode;
+  const rule: WhitelistRule = { pattern: entry.pattern, mode };
+  if (mode === "regex") {
+    try {
+      rule.compiled = new RegExp(entry.pattern);
+    } catch {
+      // Invalid regex: degrade to substring match silently. The user's
+      // intent is "filter this", and substring is the safest fallback.
+      rule.mode = "substring";
+    }
+  }
+  return rule;
 }
 
 /**
- * Returns true when the className matches any entry in the whitelist
- * (substring match, case-insensitive). v1.14.
+ * Build the effective expected-alive whitelist by merging the curated
+ * default list (unless disabled) with the user-supplied set. v1.14;
+ * v1.17 B-02 added per-entry match modes (exact / substring / regex).
  */
-function isExpectedAlive(
-  className: string,
-  whitelist: Set<string>,
-): boolean {
-  if (whitelist.size === 0) return false;
+function buildExpectedAliveSet(
+  userSupplied: readonly WhitelistInput[] | undefined,
+  disableDefault: boolean,
+): WhitelistRule[] {
+  const base = disableDefault
+    ? []
+    : DEFAULT_EXPECTED_ALIVE_CLASSES.map((pattern) =>
+        normalizeWhitelistEntry({ pattern, mode: "exact" }, "exact"),
+      );
+  const supplied = (userSupplied ?? []).map((e) => normalizeWhitelistEntry(e));
+  return [...base, ...supplied];
+}
+
+/**
+ * Returns true when the className matches any entry in the whitelist.
+ * Each entry uses its configured match mode. v1.14; v1.17 B-02.
+ */
+function isExpectedAlive(className: string, whitelist: WhitelistRule[]): boolean {
+  if (whitelist.length === 0) return false;
   const lc = className.toLowerCase();
-  for (const w of whitelist) if (lc.includes(w)) return true;
+  for (const rule of whitelist) {
+    if (rule.mode === "exact") {
+      if (lc === rule.pattern.toLowerCase()) return true;
+    } else if (rule.mode === "regex") {
+      if (rule.compiled && rule.compiled.test(className)) return true;
+    } else {
+      // substring (default)
+      if (lc.includes(rule.pattern.toLowerCase())) return true;
+    }
+  }
   return false;
 }
 
 async function buildAbandonedMemoryFallback(
   beforePath: string,
   afterPath: string,
-  expectedAliveWhitelist: Set<string>,
+  expectedAliveWhitelist: WhitelistRule[],
 ): Promise<
   | {
       verdict: "PASS" | "PARTIAL" | "FAIL";

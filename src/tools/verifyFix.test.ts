@@ -155,6 +155,40 @@ describe("verifyFix expectedAliveClasses whitelist (v1.14 item M)", () => {
     expect(DEFAULT_EXPECTED_ALIVE_CLASSES).toContain("CAMPreviewView");
   });
 
+  it("v1.17 B-02: schema accepts object entries with per-mode match (exact / substring / regex)", async () => {
+    const { verifyFixSchema } = await import("./verifyFix.js");
+    const parsed = verifyFixSchema.parse({
+      before: "/tmp/before.memgraph",
+      after: "/tmp/after.memgraph",
+      expectedAliveClasses: [
+        "PlainSubstring", // string -> mode defaults to substring
+        { pattern: "ExactClassName", mode: "exact" },
+        { pattern: "^MyApp\\..*ViewController$", mode: "regex" },
+        { pattern: "DefaultModeObject" }, // object without mode -> defaults to substring
+      ],
+    });
+    expect(parsed.expectedAliveClasses).toHaveLength(4);
+    expect(parsed.expectedAliveClasses?.[1]).toEqual({
+      pattern: "ExactClassName",
+      mode: "exact",
+    });
+    expect(parsed.expectedAliveClasses?.[2]).toEqual({
+      pattern: "^MyApp\\..*ViewController$",
+      mode: "regex",
+    });
+  });
+
+  it("v1.17 B-02: schema rejects invalid mode values", async () => {
+    const { verifyFixSchema } = await import("./verifyFix.js");
+    expect(() =>
+      verifyFixSchema.parse({
+        before: "/tmp/before.memgraph",
+        after: "/tmp/after.memgraph",
+        expectedAliveClasses: [{ pattern: "Foo", mode: "alphabetical" as unknown as "exact" }],
+      }),
+    ).toThrow();
+  });
+
   it("isExpectedAlive matches substrings case-insensitively (via internal helper)", async () => {
     // We don't export the helpers directly; verify the visible behavior
     // by checking the default-list-driven match patterns work both for

@@ -7,7 +7,7 @@ import {
   recordTimeProfileSchema,
   shouldPreflightXctrace,
 } from "./recordTimeProfile.js";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureMemgraphSchema, classifyLeaksFailure } from "./captureMemgraph.js";
@@ -292,23 +292,58 @@ describe("maybeOpenInInstruments (v1.14 item J)", () => {
     expect(maybeOpenInInstruments(tracePath)).toBe(false);
   });
 
-  it("returns true when env flag is set AND trace bundle exists on disk", () => {
+  it("returns true when env flag is set AND trace bundle is complete (v1.17 B-04: requires Trace1.run/MANIFEST.plist)", () => {
     process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "1";
     const tracePath = join(scratchDir, "real.trace");
-    mkdirSync(tracePath); // trace bundle is a directory
+    mkdirSync(tracePath);
+    // v1.17 B-04: must have Trace1.run/MANIFEST.plist; a wedged bundle
+    // has only RunIssues.storedata. Create the manifest to mark
+    // 'completable export'.
+    const runDir = join(tracePath, "Trace1.run");
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, "MANIFEST.plist"), "stub");
     expect(maybeOpenInInstruments(tracePath)).toBe(true);
   });
 
-  it("rejects values other than '1' for the env flag (no accidental opt-in)", () => {
-    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "true";
-    const tracePath = join(scratchDir, "real.trace");
+  it("v1.17 B-04: returns false when trace bundle is a wedge (has RunIssues.storedata but no MANIFEST.plist)", () => {
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "1";
+    const tracePath = join(scratchDir, "wedge.trace");
     mkdirSync(tracePath);
+    const runDir = join(tracePath, "Trace1.run");
+    mkdirSync(runDir);
+    // Wedged xctrace bundle: only RunIssues.storedata, no MANIFEST.plist.
+    writeFileSync(join(runDir, "RunIssues.storedata"), "stub");
     expect(maybeOpenInInstruments(tracePath)).toBe(false);
+  });
+
+  it("v1.17 B-03: accepts strtobool truthy set for env flag (was strict '1' only pre-v1.17)", () => {
+    const tracePath = join(scratchDir, "complete.trace");
+    mkdirSync(tracePath);
+    const runDir = join(tracePath, "Trace1.run");
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, "MANIFEST.plist"), "stub");
+
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "true";
+    expect(maybeOpenInInstruments(tracePath)).toBe(true);
+
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "yes";
+    expect(maybeOpenInInstruments(tracePath)).toBe(true);
+  });
+
+  it("v1.17 B-03: falsy strings (0 / false / no) keep the open gated off", () => {
+    const tracePath = join(scratchDir, "complete.trace");
+    mkdirSync(tracePath);
+    const runDir = join(tracePath, "Trace1.run");
+    mkdirSync(runDir);
+    writeFileSync(join(runDir, "MANIFEST.plist"), "stub");
 
     process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "0";
     expect(maybeOpenInInstruments(tracePath)).toBe(false);
 
-    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "yes";
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "false";
+    expect(maybeOpenInInstruments(tracePath)).toBe(false);
+
+    process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS = "no";
     expect(maybeOpenInInstruments(tracePath)).toBe(false);
   });
 });

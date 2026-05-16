@@ -35,6 +35,7 @@
 
 import os from "node:os";
 import { join as joinPath } from "node:path";
+import { parseBooleanEnv } from "./parseBooleanEnv.js";
 
 export interface SecurityFlags {
   allowLaunch: boolean;
@@ -78,7 +79,12 @@ export function getSecurityFlags(
   env: Readonly<Record<string, string | undefined>> = process.env,
   homeDir: string = os.homedir(),
 ): SecurityFlags {
-  const allowLaunch = env.MEMORYDETECTIVE_ALLOW_LAUNCH === "1";
+  // v1.17 B-03: accept the strtobool truthy set.
+  const allowLaunch = parseBooleanEnv(
+    env.MEMORYDETECTIVE_ALLOW_LAUNCH,
+    false,
+    "MEMORYDETECTIVE_ALLOW_LAUNCH",
+  );
 
   const rawMax = env.MEMORYDETECTIVE_MAX_RECORDING_SECONDS;
   let maxRecordingSeconds = DEFAULT_MAX_RECORDING_SECONDS;

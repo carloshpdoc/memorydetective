@@ -22,6 +22,7 @@ import { z } from "zod";
 import { existsSync, mkdirSync, statSync, readdirSync } from "node:fs";
 import { resolve as resolvePath, join as joinPath } from "node:path";
 import { spawn } from "node:child_process";
+import { runCommand } from "../runtime/exec.js";
 import { getSecurityFlags } from "../runtime/securityFlags.js";
 import { inspectTrace, type InspectTraceResult } from "./inspectTrace.js";
 
@@ -68,6 +69,15 @@ export interface RecordViaInstrumentsAppResult {
   instructions: string[];
   /** True when the watcher gave up before finding a new `.trace`. */
   timedOut?: boolean;
+  /**
+   * v1.17 B-01. True when the trace was detected via the Instruments.app
+   * AppleScript document query, NOT via the filesystem watcher. Means
+   * the user saved the .trace OUTSIDE the configured `watchDir`. The
+   * `tracePath` still resolves correctly; this flag explains the
+   * detection path so callers can suggest "next time save to <watchDir>"
+   * or update their watcher config.
+   */
+  savedOutsideWatchDir?: boolean;
   /** Wall-clock seconds the user spent recording (start of watcher to detection). */
   elapsedSec: number;
   /** Chained inspectTrace summary when the recording was found AND was readable. */
@@ -150,6 +160,46 @@ export function buildInstructions(template: string, watchDir: string): string[] 
 }
 
 /**
+ * v1.17 B-01: query Instruments.app for the file paths of currently
+ * open documents via AppleScript. Used as a cross-check during the
+ * poll loop: if the user saves a `.trace` OUTSIDE `watchDir`, the
+ * directory watcher misses it, but Instruments.app will have the new
+ * document open and we can read its `file` property.
+ *
+ * Returns an array of absolute POSIX paths. Empty array when Instruments
+ * is not running, has no documents open, or the AppleScript fails.
+ *
+ * Exported for testing.
+ */
+export async function queryInstrumentsDocumentPaths(
+  exec: (cmd: string, args: string[]) => Promise<{ code: number; stdout: string }>,
+): Promise<string[]> {
+  const script = [
+    'tell application "Instruments"',
+    "  set docs to every document",
+    "  set out to {}",
+    "  repeat with d in docs",
+    "    try",
+    "      set f to file of d",
+    "      set end of out to POSIX path of f",
+    "    end try",
+    "  end repeat",
+    "  return out",
+    "end tell",
+  ].join("\n");
+  try {
+    const result = await exec("osascript", ["-e", script]);
+    if (result.code !== 0) return [];
+    return result.stdout
+      .split(/[,\n]/)
+      .map((s) => s.trim())
+      .filter((s) => s.endsWith(".trace"));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Spawn `open -a Instruments` fire-and-forget. v1.16. Returns immediately;
  * Instruments.app launch takes a few seconds and the user interacts with
  * it independently of the watcher loop.
@@ -180,6 +230,44 @@ function sleep(ms: number): Promise<void> {
 const POLL_INTERVAL_MS = 5_000;
 const STABLE_FOR_MS = 10_000;
 
+/**
+ * v1.17 B-01 helper: assemble the success-path response when a new
+ * `.trace` is detected via either the filesystem watcher OR the
+ * Instruments.app AppleScript document query. Shared between both
+ * detection paths to keep the shape consistent.
+ */
+async function buildSuccessResult(
+  candidate: string,
+  watchDir: string,
+  instructions: string[],
+  startMs: number,
+  savedOutsideWatchDir: boolean,
+): Promise<RecordViaInstrumentsAppResult> {
+  const elapsedSec = Math.round((Date.now() - startMs) / 1000);
+  let inspection: InspectTraceResult | undefined;
+  try {
+    inspection = await inspectTrace({ tracePath: candidate });
+  } catch {
+    // Inspection failure is non-fatal.
+  }
+  const detectedVia = savedOutsideWatchDir
+    ? "Instruments.app GUI (user saved outside watchDir)"
+    : `watchDir \`${watchDir}\``;
+  const diagnosis = inspection
+    ? `Captured \`${candidate}\` after ${elapsedSec}s via ${detectedVia}. ${inspection.schemas.length} schemas in the TOC.`
+    : `Captured \`${candidate}\` after ${elapsedSec}s via ${detectedVia}. Inspect failed; pass the path to inspectTrace manually.`;
+  return {
+    ok: true,
+    tracePath: candidate,
+    watchDir,
+    instructions,
+    elapsedSec,
+    ...(inspection ? { inspection } : {}),
+    ...(savedOutsideWatchDir ? { savedOutsideWatchDir: true } : {}),
+    diagnosis,
+  };
+}
+
 export async function recordViaInstrumentsApp(
   input: RecordViaInstrumentsAppInput,
 ): Promise<RecordViaInstrumentsAppResult> {
@@ -198,36 +286,52 @@ export async function recordViaInstrumentsApp(
 
   openInstrumentsApp();
 
+  // v1.17 B-01: also baseline the Instruments-open-document set so we
+  // can detect a NEW trace that's open in the GUI even when the user
+  // saves it outside our watchDir. The osascript adapter for the
+  // queryInstrumentsDocumentPaths function uses runCommand.
+  const oscAdapter = (cmd: string, args: string[]) =>
+    runCommand(cmd, args, { timeoutMs: 8_000 });
+  const instrumentsBaseline = new Set(
+    await queryInstrumentsDocumentPaths(oscAdapter),
+  );
+
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    // Path A: directory watcher. Detects saves under watchDir.
     const current = snapshotTracesInDir(watchDir);
     const fresh = detectNewTraces(current, baseline);
-    // Pick the first stable new trace (oldest mtime that is also stable).
     for (const candidate of fresh) {
       if (isStable(candidate, Date.now(), STABLE_FOR_MS)) {
-        const elapsedSec = Math.round((Date.now() - start) / 1000);
-        // Best-effort: chain into inspectTrace so the caller sees an
-        // immediate summary. Failures here do not invalidate the
-        // recording itself; we just omit the field.
-        let inspection: InspectTraceResult | undefined;
-        try {
-          inspection = await inspectTrace({ tracePath: candidate });
-        } catch {
-          // Inspection failure is non-fatal.
-        }
-        return {
-          ok: true,
-          tracePath: candidate,
+        return await buildSuccessResult(
+          candidate,
           watchDir,
           instructions,
-          elapsedSec,
-          ...(inspection ? { inspection } : {}),
-          diagnosis: inspection
-            ? `Captured \`${candidate}\` after ${elapsedSec}s. ${inspection.schemas.length} schemas in the TOC.`
-            : `Captured \`${candidate}\` after ${elapsedSec}s. Inspect failed; pass the path to inspectTrace manually.`,
-        };
+          start,
+          /* savedOutsideWatchDir */ false,
+        );
       }
     }
+
+    // Path B (v1.17 B-01): Instruments AppleScript document query.
+    // Detects saves OUTSIDE watchDir that the directory watcher misses.
+    // Only treats as success when the new document path exists AND is
+    // stable for the same window the directory watcher uses.
+    const docs = await queryInstrumentsDocumentPaths(oscAdapter);
+    for (const docPath of docs) {
+      if (instrumentsBaseline.has(docPath)) continue;
+      const resolvedDoc = resolvePath(docPath);
+      if (!existsSync(resolvedDoc)) continue;
+      if (!isStable(resolvedDoc, Date.now(), STABLE_FOR_MS)) continue;
+      return await buildSuccessResult(
+        resolvedDoc,
+        watchDir,
+        instructions,
+        start,
+        /* savedOutsideWatchDir */ !resolvedDoc.startsWith(watchDir),
+      );
+    }
+
     await sleep(POLL_INTERVAL_MS);
   }
 

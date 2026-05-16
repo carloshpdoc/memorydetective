@@ -13,6 +13,7 @@ import {
   maxRecordingExceededMessage,
 } from "../runtime/securityFlags.js";
 import { getPlatformAdvisory } from "../runtime/platformCheck.js";
+import { parseBooleanEnv } from "../runtime/parseBooleanEnv.js";
 
 /**
  * Base shape, exposed so the MCP layer can read `.shape` (ZodEffects from
@@ -217,9 +218,16 @@ export function shouldPreflightXctrace(
   osPlatform?: () => NodeJS.Platform,
   osRelease?: () => string,
 ): boolean {
+  // v1.17 B-03: accept the strtobool set, not just "1" / "0". Empty / unset
+  // falls through to the auto-detection arm.
   const explicit = env.MEMORYDETECTIVE_PREFLIGHT_XCTRACE;
-  if (explicit === "1") return true;
-  if (explicit === "0") return false;
+  if (explicit != null && explicit.trim() !== "") {
+    return parseBooleanEnv(
+      explicit,
+      false,
+      "MEMORYDETECTIVE_PREFLIGHT_XCTRACE",
+    );
+  }
   // Auto: only when the known-broken combination applies.
   const onMacOS26 = getPlatformAdvisory(env, osPlatform, osRelease) != null;
   const isSimTarget = !!input.simulatorId && !input.deviceId;
@@ -295,8 +303,23 @@ export async function preflightXctraceRecord(
  * Instruments in test runs.
  */
 export function maybeOpenInInstruments(tracePath: string): boolean {
-  if (process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS !== "1") return false;
+  if (
+    !parseBooleanEnv(
+      process.env.MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS,
+      false,
+      "MEMORYDETECTIVE_AUTO_OPEN_INSTRUMENTS",
+    )
+  ) {
+    return false;
+  }
   if (!existsSync(tracePath)) return false;
+  // v1.17 B-04: skip the open when the bundle is a wedged shell.
+  // A complete xctrace export writes Trace1.run/MANIFEST.plist; a wedge
+  // produces only Trace1.run/RunIssues.storedata. Opening a wedge in
+  // Instruments shows a Document Missing Template Error dialog, which
+  // is worse UX than just not opening.
+  const manifest = `${tracePath}/Trace1.run/MANIFEST.plist`;
+  if (!existsSync(manifest)) return false;
   try {
     const child = spawn("open", ["-a", "Instruments", tracePath], {
       detached: true,

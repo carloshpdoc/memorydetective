@@ -24,27 +24,34 @@ describe("getSecurityFlags", () => {
       ).toBe(true);
     });
 
-    it("stays false on common-but-non-literal-1 truthy values", () => {
-      // Deliberately strict: the gate is explicit, not "anything truthy".
-      // Operators reading their shell history should see exactly the value
-      // that turned the gate on.
+    it("v1.17 B-03: accepts the strtobool truthy set (true / yes / on / etc.)", () => {
+      // Pre-v1.17 was deliberately strict (only "1" turned the gate on),
+      // which caused silent failures when users exported MEMORYDETECTIVE_*
+      // env vars with the shell-history-natural "true" or "yes". v1.17
+      // normalized all five MEMORYDETECTIVE_* boolean flags to the
+      // strtobool set via parseBooleanEnv. Stderr emits a one-time warning
+      // on unrecognized values, but the recognized truthy strings now
+      // turn the gate on as the operator intuitively expects.
       expect(
-        getSecurityFlags(
-          { MEMORYDETECTIVE_ALLOW_LAUNCH: "true" },
-          FAKE_HOME,
-        ).allowLaunch,
+        getSecurityFlags({ MEMORYDETECTIVE_ALLOW_LAUNCH: "true" }, FAKE_HOME).allowLaunch,
+      ).toBe(true);
+      expect(
+        getSecurityFlags({ MEMORYDETECTIVE_ALLOW_LAUNCH: "yes" }, FAKE_HOME).allowLaunch,
+      ).toBe(true);
+      expect(
+        getSecurityFlags({ MEMORYDETECTIVE_ALLOW_LAUNCH: "on" }, FAKE_HOME).allowLaunch,
+      ).toBe(true);
+    });
+
+    it("v1.17 B-03: falsy strings stay false", () => {
+      expect(
+        getSecurityFlags({ MEMORYDETECTIVE_ALLOW_LAUNCH: "0" }, FAKE_HOME).allowLaunch,
       ).toBe(false);
       expect(
-        getSecurityFlags(
-          { MEMORYDETECTIVE_ALLOW_LAUNCH: "yes" },
-          FAKE_HOME,
-        ).allowLaunch,
+        getSecurityFlags({ MEMORYDETECTIVE_ALLOW_LAUNCH: "false" }, FAKE_HOME).allowLaunch,
       ).toBe(false);
       expect(
-        getSecurityFlags(
-          { MEMORYDETECTIVE_ALLOW_LAUNCH: "0" },
-          FAKE_HOME,
-        ).allowLaunch,
+        getSecurityFlags({ MEMORYDETECTIVE_ALLOW_LAUNCH: "no" }, FAKE_HOME).allowLaunch,
       ).toBe(false);
     });
   });

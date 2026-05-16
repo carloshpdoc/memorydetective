@@ -17,6 +17,7 @@
  */
 
 import os from "node:os";
+import { parseBooleanEnv } from "./parseBooleanEnv.js";
 
 export type PlatformAdvisory = {
   issue: "macos-26-task-for-pid-broken";
@@ -64,7 +65,16 @@ export function getPlatformAdvisory(
   osPlatform: () => NodeJS.Platform = os.platform,
   osRelease: () => string = os.release,
 ): PlatformAdvisory | null {
-  if (env.MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY === "1") return null;
+  // v1.17 B-03: accept the strtobool truthy set (1 / true / yes / on / etc.).
+  if (
+    parseBooleanEnv(
+      env.MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY,
+      false,
+      "MEMORYDETECTIVE_SUPPRESS_PLATFORM_ADVISORY",
+    )
+  ) {
+    return null;
+  }
   if (osPlatform() !== "darwin") return null;
   const release = osRelease();
   const majorStr = release.split(".")[0];

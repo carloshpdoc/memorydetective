@@ -48,6 +48,7 @@ import {
   sep as pathSep,
 } from "node:path";
 import { getSecurityFlags } from "../runtime/securityFlags.js";
+import { parseBooleanEnv } from "../runtime/parseBooleanEnv.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const cleanupTracesShape = {
@@ -224,7 +225,13 @@ export function cleanupTraces(input: CleanupTracesInput): CleanupTracesResult {
   // counterpart to ALLOW_LAUNCH for bootAndLaunchForLeakInvestigation,
   // applied to destructive disk operations.
   if (!isInsideTraceRoot(root, traceRootResolved)) {
-    if (process.env.MEMORYDETECTIVE_ALLOW_EXTERNAL_CLEANUP !== "1") {
+    if (
+      !parseBooleanEnv(
+        process.env.MEMORYDETECTIVE_ALLOW_EXTERNAL_CLEANUP,
+        false,
+        "MEMORYDETECTIVE_ALLOW_EXTERNAL_CLEANUP",
+      )
+    ) {
       return {
         ok: false,
         dryRun,
