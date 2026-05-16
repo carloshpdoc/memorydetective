@@ -8,3 +8,9 @@ coverage/
 .vscode/
 .idea/
 *.tsbuildinfo
+
+# Captured .trace / .memgraph artifacts from dogfooding sessions.
+# These end up in the repo root when the MCP tools are invoked without a
+# captureDir override; keep them out of git.
+*.trace/
+*.memgraph
