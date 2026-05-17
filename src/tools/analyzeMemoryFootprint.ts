@@ -237,10 +237,6 @@ export function analyzeMemoryFootprintFromXml(
     status: "available",
     supportStatus: [
       {
-        // The SupportStatusKind enum doesn't have memory-footprint yet;
-        // tagging as potential-hangs is wrong. We extend the enum in a
-        // follow-up; for now use a generic kind and put the real schema
-        // name in sourceSchemas so callers branch on that.
         kind: "memory-footprint",
         status: "available",
         sourceSchemas: ["memory-footprint"],

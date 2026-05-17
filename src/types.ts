@@ -105,17 +105,47 @@ export type DataStatus =
  * step, distinct from `not_exportable` (xctrace ran but refused) and
  * `not_present` (schema absent from the trace TOC).
  */
-export type SupportStatusKind =
-  | "potential-hangs"
-  | "hang-risks"
-  | "animation-hitches"
-  | "time-profile"
-  | "allocations"
-  | "app-launch"
-  | "network-connections"
-  | "memory-footprint"
-  | "energy-impact"
-  | "leak-events";
+/**
+ * Known kinds memorydetective emits today. Exported as a runtime constant
+ * so callers can iterate or validate; in TypeScript context, prefer the
+ * `SupportStatusKind` type alias below (which is open to arbitrary strings
+ * so downstream consumers can add their own kinds without a memorydetective
+ * type bump).
+ *
+ * v1.18 D-01: pre-v1.18 `SupportStatusKind` was a closed TS literal union,
+ * which forced a breaking type change every time we added a kind (e.g.
+ * v1.18 adds 4 MetricKit kinds). The open-enum pattern below keeps inline
+ * literal autocomplete + typo detection (via the `Known` alias used by all
+ * internal call sites) while letting external code pass any string.
+ */
+export const SUPPORT_STATUS_KINDS = [
+  "potential-hangs",
+  "hang-risks",
+  "animation-hitches",
+  "time-profile",
+  "allocations",
+  "app-launch",
+  "network-connections",
+  "memory-footprint",
+  "energy-impact",
+  "leak-events",
+] as const;
+
+/** Tight union of the kinds memorydetective itself emits. Used internally so
+ *  a typo on a literal still fails the build. */
+export type KnownSupportStatusKind = (typeof SUPPORT_STATUS_KINDS)[number];
+
+/**
+ * The kind tag on a {@link SupportStatus} entry. Open by design: known
+ * memorydetective kinds (see {@link SUPPORT_STATUS_KINDS}) get autocomplete
+ * and typo-checking; arbitrary strings (e.g. a future analyzer not yet
+ * registered, or a downstream tool extending the surface) are accepted
+ * without a memorydetective type bump.
+ *
+ * The `(string & {})` intersection is the canonical TS pattern that
+ * preserves union autocomplete while widening to plain `string`.
+ */
+export type SupportStatusKind = KnownSupportStatusKind | (string & {});
 
 export interface SupportStatus {
   kind: SupportStatusKind;

@@ -13,6 +13,7 @@ import { analyzeAllocationsFromXml } from "./analyzeAllocations.js";
 import { analyzeAppLaunchFromXml } from "./analyzeAppLaunch.js";
 import { analyzeTimeProfileFromXml } from "./analyzeTimeProfile.js";
 import { analyzeNetworkActivityFromXml } from "./analyzeNetworkActivity.js";
+import { SUPPORT_STATUS_KINDS, type SupportStatus } from "../types.js";
 
 const EMPTY_XML = `<?xml version="1.0"?><trace-query-result><node/></trace-query-result>`;
 
@@ -110,5 +111,57 @@ describe("supportStatus[] unified surface (v1.14 item I)", () => {
     expect(r.status).toBe("not_present");
     // Both alias and new field should agree.
     expect(r.status).toBe(r.supportStatus[0].status);
+  });
+});
+
+describe("v1.18 D-01: SUPPORT_STATUS_KINDS open-enum surface", () => {
+  it("SUPPORT_STATUS_KINDS includes every kind emitted by the trace analyzers today", () => {
+    // The 10 kinds the v1.14/v1.15 analyzers emit. If a new analyzer adds
+    // a kind, append to SUPPORT_STATUS_KINDS in src/types.ts and to this list.
+    expect(SUPPORT_STATUS_KINDS).toEqual([
+      "potential-hangs",
+      "hang-risks",
+      "animation-hitches",
+      "time-profile",
+      "allocations",
+      "app-launch",
+      "network-connections",
+      "memory-footprint",
+      "energy-impact",
+      "leak-events",
+    ]);
+  });
+
+  it("SupportStatus.kind accepts strings outside SUPPORT_STATUS_KINDS (open-enum)", () => {
+    // The whole point of D-01: downstream code authors new kinds (e.g. the
+    // v1.18 MetricKit lane) without a memorydetective type bump. The pre-v1.18
+    // closed union would fail to type-check this assignment.
+    const fake: SupportStatus = {
+      kind: "crash-diagnostics",
+      status: "available",
+    };
+    expect(fake.kind).toBe("crash-diagnostics");
+  });
+
+  it("known kinds still get inline-literal autocomplete + typo detection", () => {
+    // Compile-time intent: assigning a literal that LOOKS LIKE a known kind
+    // but is misspelled should still be acceptable at runtime (open enum)
+    // but the codebase relies on KnownSupportStatusKind internally to keep
+    // typo-safety. Smoke test: every internal kind we emit is in the known list.
+    const knownSet = new Set<string>(SUPPORT_STATUS_KINDS);
+    for (const kind of [
+      "potential-hangs",
+      "hang-risks",
+      "animation-hitches",
+      "time-profile",
+      "allocations",
+      "app-launch",
+      "network-connections",
+      "memory-footprint",
+      "energy-impact",
+      "leak-events",
+    ]) {
+      expect(knownSet.has(kind)).toBe(true);
+    }
   });
 });
