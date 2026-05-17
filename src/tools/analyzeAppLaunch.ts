@@ -2,14 +2,14 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
-import { fetchDiscoveredSchemas } from "../parsers/schemaDiscovery.js";
+import { resolveSchemasForAnalyzer } from "../parsers/schemaDiscovery.js";
 import {
   parseXctraceXml,
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
-import type { SupportStatus } from "../types.js";
+import type { AnalyzeTraceOptions, SupportStatus } from "../types.js";
 
 export const analyzeAppLaunchSchema = z.object({
   tracePath: z
@@ -184,15 +184,17 @@ function buildDiagnosis(
 
 export async function analyzeAppLaunch(
   input: AnalyzeAppLaunchInput,
+  options?: AnalyzeTraceOptions,
 ): Promise<AnalyzeAppLaunchResult> {
   const tracePath = resolvePath(input.tracePath);
   if (!existsSync(tracePath)) {
     throw new Error(`Trace bundle not found: ${tracePath}`);
   }
-  const { "app-launch": schemaName } = await fetchDiscoveredSchemas(
+  const { "app-launch": schemaName } = await resolveSchemasForAnalyzer(
     runCommand,
     tracePath,
     ["app-launch"] as const,
+    options?.discoveredSchemas,
   );
   const result = await runCommand(
     "xcrun",

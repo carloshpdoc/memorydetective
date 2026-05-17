@@ -165,6 +165,48 @@ export async function fetchDiscoveredSchemas<F extends SchemaFamily>(
 }
 
 /**
+ * v1.18 D-02. Cache-aware schema resolution for the trace analyzers.
+ *
+ * When the caller already has a `discoveredSchemas` map (typically because
+ * a higher-level orchestrator like `summarizeTrace` ran discovery once up
+ * front and is fanning out to multiple analyzers in parallel), each analyzer
+ * uses the cached entries instead of paying the `xctrace --toc` cost again.
+ *
+ * Pre-v1.18 every analyzer ran its own `xctrace --toc`. `summarizeTrace`
+ * fan-outs to 6 analyzers, so the TOC was fetched 6 times for one trace.
+ * Measured penalty: +600-3000ms wall-clock on real Apple traces (xctrace
+ * cold-start dominated). With this helper + a single up-front discovery
+ * call, the penalty drops to a single fetch.
+ *
+ * When `cached` is `undefined`, falls back to {@link fetchDiscoveredSchemas}
+ * (the cold path) so direct callers that do not orchestrate keep working.
+ *
+ * When `cached` is provided but missing a family, the canonical name from
+ * {@link CANONICAL_SCHEMA_NAME} is used (same fallback as the cold path's
+ * pattern-not-matched branch). This keeps the analyzer pipeline working
+ * even when the orchestrator forgot to discover a family.
+ *
+ * Mirrors the optional-input pattern used elsewhere in the codebase
+ * (e.g. `analyzeHangs.hangRisksXml`): one path that wraps the
+ * runtime call, one that takes pre-fetched data.
+ */
+export async function resolveSchemasForAnalyzer<F extends SchemaFamily>(
+  runCommand: SchemaDiscoveryRunner,
+  tracePath: string,
+  families: readonly F[],
+  cached?: Partial<Record<string, string>>,
+): Promise<Record<F, string>> {
+  if (cached) {
+    const out = {} as Record<F, string>;
+    for (const f of families) {
+      out[f] = cached[f] ?? CANONICAL_SCHEMA_NAME[f];
+    }
+    return out;
+  }
+  return fetchDiscoveredSchemas(runCommand, tracePath, families);
+}
+
+/**
  * v1.17 B-06. Same as {@link fetchDiscoveredSchemas} but also returns a
  * discovery status so callers can surface "we fell back" via the unified
  * `supportStatus[]` instead of silently using canonical names.

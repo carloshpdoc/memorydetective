@@ -20,14 +20,14 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
-import { fetchDiscoveredSchemas } from "../parsers/schemaDiscovery.js";
+import { resolveSchemasForAnalyzer } from "../parsers/schemaDiscovery.js";
 import {
   parseXctraceXml,
   asNumber,
   asFormatted,
   type XctraceValue,
 } from "../parsers/xctraceXml.js";
-import type { DataStatus, SupportStatus } from "../types.js";
+import type { AnalyzeTraceOptions, DataStatus, SupportStatus } from "../types.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeLeakTimelineSchema = z.object({
@@ -284,15 +284,17 @@ function buildDiagnosis(
 
 export async function analyzeLeakTimeline(
   input: AnalyzeLeakTimelineInput,
+  options?: AnalyzeTraceOptions,
 ): Promise<AnalyzeLeakTimelineResult> {
   const tracePath = resolvePath(input.tracePath);
   if (!existsSync(tracePath)) {
     throw new Error(`Trace bundle not found: ${tracePath}`);
   }
-  const { leaks: schemaName } = await fetchDiscoveredSchemas(
+  const { leaks: schemaName } = await resolveSchemasForAnalyzer(
     runCommand,
     tracePath,
     ["leaks"] as const,
+    options?.discoveredSchemas,
   );
   const result = await runCommand(
     "xcrun",

@@ -2,13 +2,13 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
-import { fetchDiscoveredSchemas } from "../parsers/schemaDiscovery.js";
+import { resolveSchemasForAnalyzer } from "../parsers/schemaDiscovery.js";
 import {
   parseXctraceXml,
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
-import type { DataStatus, SupportStatus } from "../types.js";
+import type { AnalyzeTraceOptions, DataStatus, SupportStatus } from "../types.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeHangsSchema = z.object({
@@ -610,6 +610,7 @@ async function captureTimeProfileRows(
 
 export async function analyzeHangs(
   input: AnalyzeHangsInput,
+  options?: AnalyzeTraceOptions,
 ): Promise<AnalyzeHangsResult> {
   const tracePath = resolvePath(input.tracePath);
   if (!existsSync(tracePath)) {
@@ -620,12 +621,15 @@ export async function analyzeHangs(
   // in one pass so a renamed schema does not break the analyzer. Falls
   // back to canonical pre-v1.14 names when the TOC fetch or pattern
   // match fails. Cost: one extra xctrace --toc invocation (~100-500ms
-  // on real traces). Cached per analyze call.
-  const discovered = await fetchDiscoveredSchemas(runCommand, tracePath, [
-    "hangs",
-    "hang-risks",
-    "time-profile",
-  ] as const);
+  // on real traces). v1.18 D-02: when `options.discoveredSchemas` is
+  // provided (e.g. by `summarizeTrace`), reuse the cached map instead of
+  // paying the TOC cost again.
+  const discovered = await resolveSchemasForAnalyzer(
+    runCommand,
+    tracePath,
+    ["hangs", "hang-risks", "time-profile"] as const,
+    options?.discoveredSchemas,
+  );
   const [hangsResult, hangRisksResult, timeProfileRows] = await Promise.all([
     runCommand(
       "xcrun",

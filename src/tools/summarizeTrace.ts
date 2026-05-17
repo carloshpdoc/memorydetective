@@ -28,6 +28,11 @@
 import { z } from "zod";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath, basename } from "node:path";
+import { runCommand } from "../runtime/exec.js";
+import {
+  fetchDiscoveredSchemasWithStatus,
+  type SchemaFamily,
+} from "../parsers/schemaDiscovery.js";
 import { inspectTrace, type InspectTraceResult } from "./inspectTrace.js";
 import {
   analyzeHangs,
@@ -552,6 +557,27 @@ export async function summarizeTrace(
   // Step 1: TOC.
   const inspection = await inspectTrace({ tracePath });
 
+  // v1.18 D-02: run schema discovery ONCE up front and share the result
+  // with every analyzer below via the `discoveredSchemas` option. Pre-v1.18
+  // each analyzer ran its own `xctrace --toc`, so summarizeTrace paid 6x
+  // the TOC cost (~600-3000ms wall-clock on real Apple traces). Now: one
+  // discovery call, six analyzers fan out against the cached map.
+  const families: readonly SchemaFamily[] = [
+    "hangs",
+    "hang-risks",
+    "animation-hitches",
+    "time-profile",
+    "allocations",
+    "app-launch",
+    "network",
+  ] as const;
+  const discovery = await fetchDiscoveredSchemasWithStatus(
+    runCommand,
+    tracePath,
+    families,
+  );
+  const discoveredSchemas = discovery.schemas;
+
   // Step 2: chain analyzers in parallel. Each branch is fault-tolerant
   // via buildAreaSummary so one failure doesn't tank the whole summary.
   const [hangs, hitches, timeProfile, allocations, appLaunch, network] =
@@ -560,61 +586,76 @@ export async function summarizeTrace(
         "potential-hangs",
         inspection,
         () =>
-          analyzeHangs({
-            tracePath,
-            topN: DEFAULT_TOP_N_HANGS,
-            minDurationMs: DEFAULT_HANG_MIN_MS,
-            includeStackClassification: true,
-          }),
+          analyzeHangs(
+            {
+              tracePath,
+              topN: DEFAULT_TOP_N_HANGS,
+              minDurationMs: DEFAULT_HANG_MIN_MS,
+              includeStackClassification: true,
+            },
+            { discoveredSchemas },
+          ),
         "potential-hangs schema absent from this trace.",
       ),
       buildAreaSummary(
         "animation-hitches",
         inspection,
         () =>
-          analyzeAnimationHitches({
-            tracePath,
-            topN: DEFAULT_TOP_N_HITCHES,
-            minDurationMs: DEFAULT_HITCH_THRESHOLD_MS,
-          }),
+          analyzeAnimationHitches(
+            {
+              tracePath,
+              topN: DEFAULT_TOP_N_HITCHES,
+              minDurationMs: DEFAULT_HITCH_THRESHOLD_MS,
+            },
+            { discoveredSchemas },
+          ),
         "animation-hitches schema absent from this trace.",
       ),
       buildAreaSummary(
         "time-profile",
         inspection,
         () =>
-          analyzeTimeProfile({
-            tracePath,
-            topN: DEFAULT_TOP_N_TIME_PROFILE,
-          }),
+          analyzeTimeProfile(
+            {
+              tracePath,
+              topN: DEFAULT_TOP_N_TIME_PROFILE,
+            },
+            { discoveredSchemas },
+          ),
         "time-profile schema absent from this trace.",
       ),
       buildAreaSummary(
         "allocations",
         inspection,
         () =>
-          analyzeAllocations({
-            tracePath,
-            topN: DEFAULT_TOP_N_ALLOCATIONS,
-            minBytes: 0,
-          }),
+          analyzeAllocations(
+            {
+              tracePath,
+              topN: DEFAULT_TOP_N_ALLOCATIONS,
+              minBytes: 0,
+            },
+            { discoveredSchemas },
+          ),
         "allocations schema absent from this trace.",
       ),
       buildAreaSummary(
         "app-launch",
         inspection,
-        () => analyzeAppLaunch({ tracePath }),
+        () => analyzeAppLaunch({ tracePath }, { discoveredSchemas }),
         "app-launch schema absent from this trace.",
       ),
       buildAreaSummary(
         "network-connections",
         inspection,
         () =>
-          analyzeNetworkActivity({
-            tracePath,
-            topN: DEFAULT_TOP_N_NETWORK,
-            minBytes: 0,
-          }),
+          analyzeNetworkActivity(
+            {
+              tracePath,
+              topN: DEFAULT_TOP_N_NETWORK,
+              minBytes: 0,
+            },
+            { discoveredSchemas },
+          ),
         "network-connections schema absent from this trace.",
       ),
     ]);

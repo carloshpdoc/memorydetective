@@ -2,13 +2,13 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { runCommand } from "../runtime/exec.js";
-import { fetchDiscoveredSchemas } from "../parsers/schemaDiscovery.js";
+import { resolveSchemasForAnalyzer } from "../parsers/schemaDiscovery.js";
 import {
   parseXctraceXml,
   asNumber,
   asFormatted,
 } from "../parsers/xctraceXml.js";
-import type { DataStatus, SupportStatus } from "../types.js";
+import type { AnalyzeTraceOptions, DataStatus, SupportStatus } from "../types.js";
 import { outputFormatField } from "../runtime/responseFormatter.js";
 
 export const analyzeTimeProfileSchema = z.object({
@@ -186,15 +186,17 @@ Workarounds:
 
 export async function analyzeTimeProfile(
   input: AnalyzeTimeProfileInput,
+  options?: AnalyzeTraceOptions,
 ): Promise<AnalyzeTimeProfileResult> {
   const tracePath = resolvePath(input.tracePath);
   if (!existsSync(tracePath)) {
     throw new Error(`Trace bundle not found: ${tracePath}`);
   }
-  const { "time-profile": schemaName } = await fetchDiscoveredSchemas(
+  const { "time-profile": schemaName } = await resolveSchemasForAnalyzer(
     runCommand,
     tracePath,
     ["time-profile"] as const,
+    options?.discoveredSchemas,
   );
   const result = await runCommand(
     "xcrun",

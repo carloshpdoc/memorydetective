@@ -147,6 +147,27 @@ export type KnownSupportStatusKind = (typeof SUPPORT_STATUS_KINDS)[number];
  */
 export type SupportStatusKind = KnownSupportStatusKind | (string & {});
 
+/**
+ * v1.18 D-02. Optional second argument shared by every trace-side analyzer.
+ *
+ * The orchestrator pattern: a higher-level caller (e.g. `summarizeTrace`)
+ * runs `xctrace --toc` once via `fetchDiscoveredSchemasWithStatus`, then
+ * passes the resulting schemas map to every analyzer it fans out to.
+ * Each analyzer skips its own TOC fetch when this is present.
+ *
+ * Direct callers (the MCP tool surface, single-tool invocations) leave
+ * this unset and pay the one-shot TOC fetch as before. No behavior change
+ * for them.
+ *
+ * The `discoveredSchemas` keys are {@link SchemaFamily} values from
+ * `src/parsers/schemaDiscovery.ts` (declared as `string` here to avoid
+ * coupling the types layer to the parsers layer). Missing keys fall back
+ * to canonical schema names so partial caches still work.
+ */
+export interface AnalyzeTraceOptions {
+  discoveredSchemas?: Partial<Record<string, string>>;
+}
+
 export interface SupportStatus {
   kind: SupportStatusKind;
   status: "available" | "partial" | "not_exportable" | "not_present" | "failed";

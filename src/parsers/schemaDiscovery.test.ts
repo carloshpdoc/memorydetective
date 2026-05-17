@@ -6,6 +6,7 @@ import {
   discoverSchemas,
   extractSchemaNamesFromToc,
   fetchDiscoveredSchemasWithStatus,
+  resolveSchemasForAnalyzer,
   _resetSchemaDiscoveryWarningsForTests,
 } from "./schemaDiscovery.js";
 
@@ -233,5 +234,63 @@ describe("SCHEMA_FAMILIES + CANONICAL_SCHEMA_NAME consistency", () => {
         true,
       );
     }
+  });
+});
+
+describe("v1.18 D-02: resolveSchemasForAnalyzer", () => {
+  it("returns from cache without invoking the runner when cache covers every family", async () => {
+    let runnerCalls = 0;
+    const spyRunner = async () => {
+      runnerCalls += 1;
+      return { code: 0, stdout: APPLE_REAL_TOC, stderr: "" };
+    };
+    const out = await resolveSchemasForAnalyzer(
+      spyRunner,
+      "/tmp/fake.trace",
+      ["hangs", "hang-risks", "time-profile"] as const,
+      {
+        hangs: "potential-hangs",
+        "hang-risks": "hang-risks",
+        "time-profile": "time-profile",
+      },
+    );
+    expect(out).toEqual({
+      hangs: "potential-hangs",
+      "hang-risks": "hang-risks",
+      "time-profile": "time-profile",
+    });
+    expect(runnerCalls).toBe(0);
+  });
+
+  it("falls back to canonical name when cache is provided but missing a family (still no runner call)", async () => {
+    let runnerCalls = 0;
+    const spyRunner = async () => {
+      runnerCalls += 1;
+      return { code: 0, stdout: APPLE_REAL_TOC, stderr: "" };
+    };
+    const out = await resolveSchemasForAnalyzer(
+      spyRunner,
+      "/tmp/fake.trace",
+      ["hangs", "allocations"] as const,
+      { hangs: "potential-hangs" }, // allocations missing
+    );
+    expect(out.hangs).toBe("potential-hangs");
+    expect(out.allocations).toBe(CANONICAL_SCHEMA_NAME.allocations);
+    expect(runnerCalls).toBe(0);
+  });
+
+  it("calls the runner on the cold path (no cache provided)", async () => {
+    let runnerCalls = 0;
+    const spyRunner = async () => {
+      runnerCalls += 1;
+      return { code: 0, stdout: APPLE_REAL_TOC, stderr: "" };
+    };
+    const out = await resolveSchemasForAnalyzer(
+      spyRunner,
+      "/tmp/fake.trace",
+      ["hangs"] as const,
+    );
+    expect(out.hangs).toBe("potential-hangs");
+    expect(runnerCalls).toBe(1);
   });
 });
