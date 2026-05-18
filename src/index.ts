@@ -97,6 +97,10 @@ import {
   recordViaInstrumentsAppSchema,
 } from "./tools/recordViaInstrumentsApp.js";
 import {
+  analyzeMetricKitPayload,
+  analyzeMetricKitPayloadSchema,
+} from "./tools/analyzeMetricKitPayload.js";
+import {
   renderCycleGraph,
   renderCycleGraphSchema,
 } from "./tools/renderCycleGraph.js";
@@ -579,6 +583,20 @@ server.registerTool(
   async (input) => {
     const result = await recordViaInstrumentsApp(input);
     return formatMcpResponse(result, "recordViaInstrumentsApp", undefined);
+  },
+);
+
+server.registerTool(
+  "analyzeMetricKitPayload",
+  {
+    title: "Analyze a .mxdiagnostic payload from MetricKit (production diagnostics)",
+    description:
+      "[mg.production] Parse Apple MetricKit `.mxdiagnostic` payloads from real-device TestFlight / App Store builds. Aggregates crashes (clustered by exception type / binary / top frame), hang hotspots (sorted by duration, with localized-string handling for `hangDuration`), CPU exceptions, and disk-write exceptions. Inputs: payloadPath (single file), payloadDir (aggregate across files), or payloadJson (raw). Each output entry includes the raw binaryUUID + offset for downstream dSYM symbolication. Returns 3 most-actionable sections + cross-tool chain hints (e.g. `objc_release` top frame -> findCycles, sqlite top frame -> analyzeHangs with main-thread-violation classifier). No symbolication in v1; that's a separate tool. Simulator does NOT generate MetricKit payloads (Apple-side limitation) — frame this as post-mortem analysis. New in v1.18.",
+    inputSchema: analyzeMetricKitPayloadSchema.shape,
+  },
+  async (input) => {
+    const result = await analyzeMetricKitPayload(input);
+    return formatMcpResponse(result, "analyzeMetricKitPayload", undefined);
   },
 );
 

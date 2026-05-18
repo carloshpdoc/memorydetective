@@ -1,0 +1,76 @@
+{
+  "timeStampBegin": "2026-05-15T10:00:00.000Z",
+  "timeStampEnd": "2026-05-16T10:00:00.000Z",
+  "crashDiagnostics": [
+    {
+      "version": "1.0.0",
+      "callStackTree": {
+        "callStacks": [
+          {
+            "threadAttributed": true,
+            "callStackRootFrames": [
+              {
+                "binaryUUID": "AAAA1111-2222-3333-4444-555555555555",
+                "binaryName": "DemoApp",
+                "offsetIntoBinaryTextSegment": 425984,
+                "address": 4295229440,
+                "sampleCount": 1,
+                "subFrames": [
+                  {
+                    "binaryUUID": "AAAA1111-2222-3333-4444-555555555555",
+                    "binaryName": "DemoApp",
+                    "offsetIntoBinaryTextSegment": 393216,
+                    "address": 4295196672,
+                    "sampleCount": 1
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "diagnosticMetaData": {
+        "exceptionType": 1,
+        "exceptionCode": 1,
+        "signal": 11,
+        "terminationReason": "Namespace SIGNAL, Code 0xb",
+        "appVersion": "1.2.3",
+        "appBuildVersion": "456",
+        "osVersion": "iOS 18.1",
+        "bundleIdentifier": "com.example.DemoApp",
+        "platformArchitecture": "arm64",
+        "virtualMemoryRegionInfo": "0x16d000000 - 0x16d004000 GuardZone"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "callStackTree": {
+        "callStacks": [
+          {
+            "threadAttributed": true,
+            "callStackRootFrames": [
+              {
+                "binaryUUID": "AAAA1111-2222-3333-4444-555555555555",
+                "binaryName": "DemoApp",
+                "offsetIntoBinaryTextSegment": 425984,
+                "address": 4295229440,
+                "sampleCount": 1
+              }
+            ]
+          }
+        ]
+      },
+      "diagnosticMetaData": {
+        "exceptionType": 1,
+        "exceptionCode": 1,
+        "signal": 11,
+        "terminationReason": "Namespace SIGNAL, Code 0xb",
+        "appVersion": "1.2.4",
+        "appBuildVersion": "457",
+        "osVersion": "iOS 18.1",
+        "bundleIdentifier": "com.example.DemoApp",
+        "platformArchitecture": "arm64"
+      }
+    }
+  ]
+}

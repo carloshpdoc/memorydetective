@@ -1,0 +1,60 @@
+{
+  "timeStampBegin": "2026-05-15T10:00:00.000Z",
+  "timeStampEnd": "2026-05-16T10:00:00.000Z",
+  "hangDiagnostics": [
+    {
+      "version": "1.0.0",
+      "callStackTree": {
+        "callStacks": [
+          {
+            "threadAttributed": true,
+            "callStackRootFrames": [
+              {
+                "binaryUUID": "BBBB1111-2222-3333-4444-555555555555",
+                "binaryName": "libsqlite3.dylib",
+                "offsetIntoBinaryTextSegment": 16384,
+                "address": 4296000000,
+                "sampleCount": 3
+              }
+            ]
+          }
+        ]
+      },
+      "diagnosticMetaData": {
+        "hangDuration": "5.4 sec",
+        "appVersion": "1.2.3",
+        "appBuildVersion": "456",
+        "osVersion": "iOS 18.1",
+        "bundleIdentifier": "com.example.DemoApp",
+        "platformArchitecture": "arm64"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "callStackTree": {
+        "callStacks": [
+          {
+            "threadAttributed": true,
+            "callStackRootFrames": [
+              {
+                "binaryUUID": "BBBB1111-2222-3333-4444-555555555555",
+                "binaryName": "DemoApp",
+                "offsetIntoBinaryTextSegment": 8192,
+                "address": 4295888888,
+                "sampleCount": 1
+              }
+            ]
+          }
+        ]
+      },
+      "diagnosticMetaData": {
+        "hangDuration": "20秒",
+        "appVersion": "1.2.3",
+        "appBuildVersion": "456",
+        "osVersion": "iOS 18.1",
+        "bundleIdentifier": "com.example.DemoApp",
+        "platformArchitecture": "arm64"
+      }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "timeStampBegin": "2026-05-15T10:00:00.000Z",
+  "timeStampEnd": "2026-05-16T10:00:00.000Z",
+  "crashDiagnostics": [
+    {
+      "version": "2.0.0",
+      "callStackTree": {
+        "callStacks": [
+          {
+            "callStackRootFrames": []
+          }
+        ]
+      },
+      "diagnosticMetaData": {
+        "exceptionType": 9,
+        "appVersion": "1.2.3",
+        "appBuildVersion": "456",
+        "osVersion": "iOS 26.0",
+        "bundleIdentifier": "com.example.DemoApp",
+        "futureField": "we should not crash on unknown keys"
+      }
+    }
+  ]
+}

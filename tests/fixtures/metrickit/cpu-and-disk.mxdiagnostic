@@ -1,0 +1,64 @@
+{
+  "timeStampBegin": "2026-05-15T10:00:00.000Z",
+  "timeStampEnd": "2026-05-16T10:00:00.000Z",
+  "cpuExceptionDiagnostics": [
+    {
+      "version": "1.0.0",
+      "callStackTree": {
+        "callStacks": [
+          {
+            "threadAttributed": true,
+            "callStackRootFrames": [
+              {
+                "binaryUUID": "CCCC1111-2222-3333-4444-555555555555",
+                "binaryName": "DemoApp",
+                "offsetIntoBinaryTextSegment": 1024,
+                "address": 4295123456,
+                "sampleCount": 50
+              }
+            ]
+          }
+        ]
+      },
+      "diagnosticMetaData": {
+        "totalCPUTime": "8.4 sec",
+        "totalSampledTime": "20.1 sec",
+        "cpuExceptionLimit": "80 %",
+        "appVersion": "1.2.3",
+        "appBuildVersion": "456",
+        "osVersion": "iOS 18.1",
+        "bundleIdentifier": "com.example.DemoApp",
+        "platformArchitecture": "arm64"
+      }
+    }
+  ],
+  "diskWriteExceptionDiagnostics": [
+    {
+      "version": "1.0.0",
+      "callStackTree": {
+        "callStacks": [
+          {
+            "threadAttributed": true,
+            "callStackRootFrames": [
+              {
+                "binaryUUID": "DDDD1111-2222-3333-4444-555555555555",
+                "binaryName": "DemoApp",
+                "offsetIntoBinaryTextSegment": 2048,
+                "address": 4295234567,
+                "sampleCount": 1
+              }
+            ]
+          }
+        ]
+      },
+      "diagnosticMetaData": {
+        "writesCaused": "1.2 GB",
+        "appVersion": "1.2.3",
+        "appBuildVersion": "456",
+        "osVersion": "iOS 18.1",
+        "bundleIdentifier": "com.example.DemoApp",
+        "platformArchitecture": "arm64"
+      }
+    }
+  ]
+}
