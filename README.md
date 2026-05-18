@@ -17,9 +17,11 @@
 - **MCP-native.** Plugs into Claude Code, Claude Desktop, Cursor, Cline, and any other MCP client. The agent drives the full investigate → classify → suggest-fix loop without you opening Instruments.
 - **Honest about its limits.** No mocked outputs, no over-promises. Hangs analysis works clean from `xctrace`; sample-level Time Profile is parsed when `xctrace` symbolicates the trace and returns a structured workaround notice when it can't (the underlying `xctrace` SIGSEGV on heavy unsymbolicated traces is an Apple-side limitation we surface explicitly). Memory Graph capture works on Mac apps and iOS simulator; physical iOS devices still need Xcode.
 
-> **What's new in v1.17** (2026-05-16): reliability pass. 14 bug fixes across three tiers swept after dogfooding. Headlines: every `MEMORYDETECTIVE_*` boolean env var now accepts the strtobool truthy set (`1 / true / yes / on`, was `1`-only, with a one-time stderr warning on unrecognized values); `verifyFix.expectedAliveClasses` supports per-entry exact / substring / regex match modes (was substring-only); `recordViaInstrumentsApp` catches traces saved outside `watchDir` via an Instruments.app AppleScript document query; `inspectTrace` fault-tolerant fallback returns `ok: true` with diagnosis text on wedged 52K bundles instead of throwing; `countAlive` framework-noise filter is now configurable with audit mode; `countByClassWithBytes` reports min / max / median for variable-size classes like `NSData`. 677 → 701 tests. Still 41 MCP tools (reliability tightening, no surface changes).
+> **What's new in v1.18** (2026-05-17): MetricKit + audit-close. **`analyzeMetricKitPayload` is the 42nd MCP tool**: ingests Apple MetricKit `.mxdiagnostic` JSON payloads from real-device TestFlight / App Store builds (post-mortem production diagnostics — no MCP competitor covers this lane today). Three actionable outputs: crash clusters by exception type / binary / top frame, hang hotspots with localized-duration parsing (`"5.4 sec"` / `"20秒"`), CPU + disk exceptions. Cross-tool chain hints (e.g. `objc_release`-style top frame surfaces a `findCycles` suggestion). Plus three audit-close items: open-enum `SupportStatusKind` (downstream consumers add kinds without a breaking type bump), invocation-scoped `schemaDiscovery` cache (`summarizeTrace` end-to-end shaved from ~28s to ~15s on real Apple traces via single up-front TOC fetch), and local-only integration tests against real Apple `.trace` bundles (closes the v1.14 P+O drift class for good). 701 → 757 tests. 41 → 42 MCP tools.
 >
-> **Also recent (v1.16)**: macOS 26.x recording-unblock release. New `recordViaInstrumentsApp` MCP tool (41st) wraps the Instruments.app GUI flow: opens the app, surfaces step-by-step instructions, watches a directory for the saved `.trace`, and chains into `inspectTrace` on success. Until Apple fixes the `xcrun xctrace record` regression on macOS 26.x sims, this is the automated path. Times out after `timeoutSec` (default 10 min).
+> **Also recent (v1.17)**: reliability pass. 14 bug fixes across three tiers. Headlines: strtobool env truthy parsing, `verifyFix` whitelist match modes (exact / substring / regex), `recordViaInstrumentsApp` catches traces saved outside `watchDir`, `inspectTrace` fault-tolerant fallback, configurable `countAlive` framework-noise filter, variable-size class min/max/median.
+>
+> **And v1.16**: macOS 26.x recording-unblock release. New `recordViaInstrumentsApp` MCP tool wraps the Instruments.app GUI flow: opens the app, surfaces step-by-step instructions, watches a directory for the saved `.trace`, and chains into `inspectTrace` on success. Until Apple fixes the `xcrun xctrace record` regression on macOS 26.x sims, this is the automated path.
 >
 > **And v1.15**: schema coverage + verify-fix UX. Three new MCP trace tools filled the remaining schema gap: `analyzeMemoryFootprint` (38th, VM resident / dirty / virtual + jetsam diagnosis), `analyzeEnergyImpact` (39th, battery drain investigation), `analyzeLeakTimeline` (40th, xctrace's leaks instrument as a time series). `summarizeTrace` now chains `analyzeNetworkActivity`. `replayScenario` captures simulator screenshots per step.
 >
@@ -105,6 +107,19 @@ When `leaks --outputGraph` fails on macOS 26.x (`Failed to get DYLD info for tas
 >
 > **Claude:** *(calls `listTraceDevices` → `recordTimeProfile` → `analyzeHangs`)*
 > Recorded `~/Desktop/run.trace` (90s, attached to DemoApp on iPhone 17 Pro Max). Found **23 user-visible hangs** (>500 ms each), longest 1.16 s, average 769 ms. Severe load. All on the main thread. Sample-level hotspots aren't symbolicated yet; open the trace in Instruments for that step (`analyzeTimeProfile` returns a structured workaround notice when `xctrace` can't symbolicate. See CHANGELOG known limits).
+
+### Analyze MetricKit payloads from real-user crashes (v1.18)
+
+> **You:** I have a folder of `.mxdiagnostic` files from the last 30 days of TestFlight at `~/Downloads/metrickit-may/`. What's catching real users?
+>
+> **Claude:** *(calls `analyzeMetricKitPayload({ payloadDir: "~/Downloads/metrickit-may/" })`)*
+> 47 payloads, 2026-04-15 → 2026-05-15. Top: **18 crashes EXC_BAD_ACCESS** clustered on the same top frame, all in builds 456 and 457 (clean on 458 + earlier). Pattern matches retain-cycle release — chain hint surfaces `findCycles` next.
+>
+> Second: **5.4s hang** on `libsqlite3.dylib` (3 samples). Pattern `db-lock`. If you reproduce locally, chain into `analyzeHangs` with `includeStackClassification: true` for the `mainThreadViolations[]` classifier.
+>
+> No symbolicated frames in v1.18 (raw `binaryUUID + offset` shipped — dSYM lookup is a separate tool, future release). Localized hang strings handled: input was `"5.4 sec"`, normalized to 5400ms; one diagnostic carried `"20秒"` (Japanese), normalized to 20000ms.
+
+See [USAGE.md § MetricKit production post-mortem](./USAGE.md#end-to-end-example-metrickit-production-post-mortem-v118) for the full end-to-end including how to wire `analyzeMetricKitPayload` into a verify-fix loop across multiple TestFlight builds.
 
 ### End-to-end: leak → file → fix suggestion
 
@@ -318,6 +333,8 @@ The cycle classifier ships **36 named antipatterns** spanning SwiftUI (including
 
 ### Read & analyze (14)
 
+> All 9 trace-side analyzers below accept an optional second argument `AnalyzeTraceOptions` (v1.18 D-02). When called by `summarizeTrace` (which runs schema discovery once up front), the cache is forwarded so the per-analyzer `xctrace --toc` calls are skipped. Direct callers leave the option unset and behavior is identical to v1.17.
+
 | Tool | What |
 |---|---|
 | `analyzeMemgraph` | Run `leaks` against a `.memgraph` and return summary (totals, ROOT CYCLE blocks, plain-English diagnosis). |
@@ -367,7 +384,13 @@ These three tools combine into a single deterministic verify-fix loop: launch th
 
 | Tool | What |
 |---|---|
-| `summarizeTrace` | Single call that chains `inspectTrace` + the 5 analyzers in parallel + cross-correlates findings (hangs overlapping with hitches, etc.) + pre-renders a compact (<10 KB) markdown summary card with a 1-sentence headline, per-area sub-sections, and suggestedNextCalls. The "trace-to-summary-card-in-one-call" play. Use this when you want one synthesis pass instead of chaining 5-6 analyzers manually. New in v1.13. |
+| `summarizeTrace` | Single call that chains `inspectTrace` + the 5 analyzers in parallel + cross-correlates findings (hangs overlapping with hitches, etc.) + pre-renders a compact (<10 KB) markdown summary card with a 1-sentence headline, per-area sub-sections, and suggestedNextCalls. The "trace-to-summary-card-in-one-call" play. Use this when you want one synthesis pass instead of chaining 5-6 analyzers manually. New in v1.13. v1.18 D-02: runs schema discovery once up front and shares the cache with all 6 analyzers, shaving 600-3000ms of wall-clock on real Apple traces. |
+
+### Production diagnostics (1, v1.18)
+
+| Tool | What |
+|---|---|
+| `analyzeMetricKitPayload` | Ingest Apple MetricKit `.mxdiagnostic` JSON payloads from real-device TestFlight / App Store builds (no MCP competitor covers this lane today). Three input forms: `payloadPath` (single file), `payloadDir` (aggregate across all `.mxdiagnostic` files in a directory), `payloadJson` (raw, in-memory). Three output sections: `crashCluster[]` (grouped by `exception-type` / `binary` / `top-frame`, each entry carries `topFrame` + `affectedBuilds[]` + raw `binaryUUID + offset` for downstream dSYM symbolication), `hangHotspots[]` (sorted by `hangDurationMs` with localized-duration parsing: `"5.4 sec"` / `"20秒"` / etc.), `cpuExceptions[]` + `diskWriteExceptions[]`. Emits 4 new `SupportStatusKind` values. Cross-tool chain hints fire automatically (`objc_release`-style top frame → `findCycles`; `libsqlite3` top frame → `analyzeHangs` with main-thread-violation classifier). NO symbolication in v1; raw bytes only. Simulator does NOT generate MetricKit payloads (Apple-side limitation); positioned as **post-mortem** analyzer, not live capture. New in v1.18. |
 
 ### Render (1)
 

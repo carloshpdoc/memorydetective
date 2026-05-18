@@ -278,6 +278,43 @@ What Claude does, step by step:
 
    Claude calls `diffMemgraphs`. Instance counts dropped, the `swiftui.tag-index-projection` cycle is gone from `cycles.persisted`, present in `cycles.goneFromBefore`.
 
+### End-to-end example: MetricKit production post-mortem (v1.18)
+
+Different lane, same shape. You collected `.mxdiagnostic` payloads from a TestFlight session, dropped them into `~/Downloads/metrickit-may/`, and you want to know what's actually happening to real users.
+
+> **You:** Tenho uma pasta `~/Downloads/metrickit-may/` com payloads MetricKit dos últimos 30 dias do TestFlight. O que está pegando os usuários?
+
+What Claude does:
+
+1. **Calls `analyzeMetricKitPayload({ payloadDir: "~/Downloads/metrickit-may/" })`**
+   - Returns `payloadCount: 47`, `timeRange: { start: "2026-04-15…", end: "2026-05-15…" }`, `crashCluster[]` with 5 entries, `hangHotspots[]` with 12 entries, `cpuExceptions[]` with 3, `diskWriteExceptions[]` empty.
+
+2. **Reads the top crash cluster:**
+   ```jsonc
+   {
+     "clusterKey": "exc=1|sig=11",
+     "exceptionType": 1,
+     "signal": 11,
+     "topFrame": "MyApp 0x1a8c40",
+     "occurrences": 18,
+     "affectedBuilds": ["456", "457"],
+     "sample": { "binaryUUID": "AAAA1111-...", "offsetIntoBinaryTextSegment": 1740864 }
+   }
+   ```
+   18 crashes on `EXC_BAD_ACCESS` (SIGSEGV), all in builds 456 and 457. The `topFrame` is unsymbolicated (memorydetective ships raw `binaryUUID + offset` in v1; dSYM symbolication is a future tool).
+
+3. **Reads `suggestedNextCalls`:** the analyzer matched `objc_release` in the top frame's deeper stack and emitted a `findCycles` chain hint. Claude surfaces it.
+
+4. **Presents the synthesis:**
+
+   > **Claude:** 47 payloads em 30 dias. Top issue: **18 crashes EXC_BAD_ACCESS** clusterizados num mesmo top frame, todos nos builds 456 e 457 (não está em 458 nem antes do 456). Padrão de retain-cycle release → recomendo capturar memgraph de uma sessão local rodando o mesmo flow + chamar `findCycles` pra identificar o cycle que tá causando o free-after-use.
+   >
+   > Segundo issue: **1 hang de 5.4s** com top frame em `libsqlite3.dylib` (3 amostras). Pattern db-lock, sugere `analyzeHangs` com `includeStackClassification` num `.trace` se você reproduzir o cenário.
+
+5. **You ship a fix and verify** with the next batch of TestFlight payloads (re-run step 1 a week depois, check se `affectedBuilds` removeu o build com o fix).
+
+The pattern is identical to the memgraph example: agent orchestrates discovery + diagnosis, you make the editing decision. Difference is the input lane: synthetic memgraph captured locally vs. production payloads from real users.
+
 ### Why this is better than "memorydetective generates the diff"
 
 If `memorydetective` tried to generate a code patch, it would have to:
@@ -307,6 +344,11 @@ Once you have the diagnosis, here are useful follow-up prompts you can paste int
 | "Profile this app on my iPhone for 90 seconds and tell me about hangs." | `listTraceDevices` → `recordTimeProfile` → `analyzeHangs` |
 | "Pull the last 5 minutes of `error`-level logs from `MyApp`." | `logShow(last: "5m", process: "MyApp", level: "default")` |
 | "Run my XCUITest with leak detection." | `detectLeaksInXCUITest(workspace, scheme, testIdentifier, …)` |
+| **Production diagnostics (v1.18). For TestFlight / App Store payloads:** | |
+| "I have a `.mxdiagnostic` file from a user crash. What happened?" | `analyzeMetricKitPayload({ payloadPath: "~/Downloads/payload.mxdiagnostic" })`. Returns `crashCluster[]` ranked by occurrences, with top frame + affected builds. |
+| "I have a folder of `.mxdiagnostic` files from the last 30 days. Aggregate them." | `analyzeMetricKitPayload({ payloadDir: "~/MetricKit/", groupBy: "exception-type" })`. Walks every `.mxdiagnostic` in the dir, clusters crashes across all of them, surfaces the top regression. |
+| "Group crashes by which framework they originate in (not by exception type)." | `analyzeMetricKitPayload({ payloadDir: "...", groupBy: "binary" })`. Useful when one third-party SDK is misbehaving across multiple call sites. |
+| "What was the longest hang real users hit this week?" | `analyzeMetricKitPayload({ payloadDir: "..." })` then read `hangHotspots[0].hangDurationMs`. Pre-converted to ms from Apple's localized strings (`"5.4 sec"`, `"20秒"`). |
 | **Verify-fix orchestration (v1.8). For the macOS 26.x `leaks` regression and deterministic before/after snapshots:** | |
 | "Build, boot, and launch `MyApp` ready for leak investigation." | `bootAndLaunchForLeakInvestigation({ workspace, scheme, simulator: { name: "iPhone 15" } })`. Returns host PID + UDID + bundle id with `MallocStackLogging=1` already applied. |
 | "Reproduce the carousel leak: tap Explore, swipe, then back, repeat 5 times." | `replayScenario({ simulatorUDID, actions: [{ type: "tap", label: "Explore" }, { type: "swipe", from: [350, 400], to: [50, 400] }, { type: "tap", label: "Back" }], repeat: 5 })` |
