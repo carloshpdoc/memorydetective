@@ -1,6 +1,6 @@
 {
   "name": "memorydetective",
-  "version": "1.18.0",
+  "version": "1.18.1",
   "mcpName": "io.github.carloshpdoc/memorydetective",
   "description": "MCP server for iOS leak hunting and performance investigation. 42 tools across .memgraph, .trace, and .mxdiagnostic files. v1.18 adds analyzeMetricKitPayload (42nd tool, post-mortem production-diagnostics from MetricKit JSON payloads — crash clusters, hang hotspots, CPU/disk exceptions), open-enum SupportStatusKind, invocation-scoped schemaDiscovery cache (600-3000ms wall-clock win on summarizeTrace), and local-only integration tests against real Apple .trace bundles. v1.17 reliability pass: strtobool env truthy parsing, verifyFix whitelist match modes, Instruments.app AppleScript document query, inspectTrace fault-tolerant fallback, configurable countAlive noise filter. v1.16 added recordViaInstrumentsApp (macOS 26.x trace recording workaround). 36-pattern retain-cycle classifier with Swift fixTemplate snippets, abandoned-memory diff for KVO/NotificationCenter/cache shapes that escape leaks(1), per-test CI gate (detectLeaksInXCTest + detectLeaksInXCUITest), main-thread violation classifier, single-call build+boot+launch for the macOS 26.x leaks --outputGraph regression, replayScenario + captureScenarioState verify-fix loop, compareTracesByPattern, SourceKit-LSP source bridging. macOS only (depends on leaks(1) and xctrace).",
   "type": "module",

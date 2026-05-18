@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.18.1] - 2026-05-17
+
+Docs-only patch. Syncs the npm README + USAGE with the v1.18 surface notes that landed on GitHub right after v1.18.0 was published. No code changes.
+
+### Changed
+
+- README "What's new" block leads with v1.18 (MetricKit 42nd tool + audit-close trio). New Examples block "Analyze MetricKit payloads from real-user crashes" with a concrete TestFlight directory aggregation example. New "Production diagnostics (1, v1.18)" API section with full `analyzeMetricKitPayload` surface description. API "Read & analyze" prefaced with the v1.18 D-02 `AnalyzeTraceOptions` hint. `summarizeTrace` row gains the D-02 wall-clock-win sentence.
+- USAGE follow-up requests table adds a "Production diagnostics" sub-section with 4 prompt examples covering `analyzeMetricKitPayload` (single payload, directory aggregation, `groupBy` variants, hang ranking). New end-to-end example "MetricKit production post-mortem" walks through a 47-payload TestFlight investigation mirroring the shape of the existing memgraph example, so the agent flow is consistent across lanes.
+
 ## [1.18.0] - 2026-05-17
 
 Audit-close + MetricKit bet. v1.17 was reliability tightening on the existing surface. v1.18 ships the **42nd MCP tool** — `analyzeMetricKitPayload`, the post-mortem production-diagnostics lane — alongside three audit-close items deferred from v1.17 (open-enum SupportStatusKind, schemaDiscovery cache, real-Apple integration tests). The MCP ecosystem has zero coverage for MetricKit today; this release opens that lane. 701 → 757 tests (+56). 41 → 42 MCP tools.
